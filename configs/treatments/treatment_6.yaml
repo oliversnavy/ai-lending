@@ -1,0 +1,3 @@
+# Treatment 6 config — overrides base.yaml where needed
+# See docs/RESEARCH_STRATEGY.md for full treatment description
+extends: ../base.yaml

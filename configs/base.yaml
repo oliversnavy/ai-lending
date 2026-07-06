@@ -1,0 +1,32 @@
+# Base experiment configuration — shared defaults across all treatments
+# Override per-treatment in configs/treatments/treatment_N.yaml
+
+portfolio:
+  capital_cap: 15_000_000       # max total principal per episode ($)
+  volume_floor: 400             # min loans funded per episode
+  episode_applicant_pool: 1000  # applicants presented per episode
+
+sensitivity_model:
+  cost_of_capital: 0.16         # blended warehouse + ABS funding rate
+  servicing_margin: 0.03        # minimum servicing margin
+  acceptance_noise: 0.05        # stochastic noise in acceptance model (ε std)
+
+loop:
+  plateau_window: 3             # consecutive iterations with no improvement to stop
+  plateau_threshold: 0.01       # min P&L improvement to count as progress (1%)
+  max_iterations: 30            # hard cap on loop iterations
+
+models:
+  primary_url: "http://localhost:8000/v1"
+  advisor_url: "http://localhost:8001/v1"
+  primary_model: "unsloth/Qwen3.6-35B-A3B-NVFP4"
+  advisor_model: "unsloth/Qwen3.6-27B-NVFP4"
+  primary_max_tokens: 8192
+  advisor_max_tokens: 16384     # advisor gets more room for deep reasoning
+
+data:
+  train_end_year: 2014
+  val_start_year: 2015
+  val_end_year: 2016
+  holdout_start_year: 2017
+  processed_dir: "data/processed"

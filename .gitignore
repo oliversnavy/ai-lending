@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+
+# Data — raw downloads (large files, not committed)
+data/
+!data/.gitkeep
+!data/processed/.gitkeep
+
+# Results — generated outputs, regenerated per run
+results/
+!results/.gitkeep
+!results/traces/.gitkeep
+!results/episode_indexes/.gitkeep
+!results/skills/.gitkeep
+
+# vLLM build artifacts
+vllm-install/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store

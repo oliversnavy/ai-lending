@@ -215,29 +215,43 @@ Skill: /skills/episode_N_pricing.py
 This keeps the index compact (2-3 lines per episode) so even 20+ episodes remain manageable in context. The agent retrieves actual code from the filesystem only when it chooses to build on a specific prior attempt.
 
 ### GEPA Optimization
-Prior to the first Ralph Wiggum loop iteration for GEPA variants:
+GEPA runs immediately after the baselines (Treatment 2), before any loop treatments:
 - GEPA runs offline on the **training partition only**
-- Optimizes the agent's prompt set (system prompts, tool descriptions, instruction modules) via reflective genetic evolution
-- Produces a locked optimized prompt set used for all subsequent loop iterations
-- GEPA is a one-time calibration step — prompts are fixed before evaluation begins, eliminating the confound of simultaneous prompt optimization and performance measurement
+- Optimizes the agent's prompt set (system prompts, tool descriptions, instruction modules) via reflective genetic evolution, specifically for the **35B-A3B primary model**
+- Produces a locked optimized prompt set used for all subsequent treatments (T3–T7)
+- GEPA is a one-time calibration step — prompts are fixed before loop evaluation begins, eliminating the confound of simultaneous prompt optimization and performance measurement
+- Positioning GEPA before the loops ensures that loop gains (T3, T4) cannot be dismissed as "compensating for a suboptimal prompt" — all loop results are on optimized prompts
 
 ---
 
 ## Treatment Ladder (Ablation Study)
 
-Each treatment is a cumulative addition to the prior level. Every variant (except the standalone baseline) runs through both Ralph Wiggum loop flavors.
+Each treatment is a cumulative addition to the prior level. Treatments 3–7 all run on GEPA-optimized prompts (locked after Treatment 2).
 
-| # | Variant | Ralph Wiggum | GEPA | Advisor | RLM STM | LT Memory |
-|---|---|---|---|---|---|---|
-| 1 | Baseline ReAct/DeepAgent | — | — | — | — | — |
-| 2 | Baseline + Loop (single-prior) | Single | — | — | — | — |
-| 3 | Baseline + Loop (all-prior) | All | — | — | — | — |
-| 4 | GEPA-optimized + Loop | Both | ✓ | — | — | — |
-| 5 | GEPA + Advisor + Loop | Both | ✓ | ✓ | — | — |
-| 6 | GEPA + Advisor + RLM + Loop | Both | ✓ | ✓ | ✓ | — |
-| 7 | Full System (all components) | Both | ✓ | ✓ | ✓ | ✓ |
+| # | Variant | Model | Loop | GEPA | Advisor | RLM STM | LT Memory |
+|---|---|---|---|---|---|---|---|
+| 1a | Baseline DeepAgent | 35B-A3B | — | — | — | — | — |
+| 1b | Baseline DeepAgent | 27B | — | — | — | — | — |
+| 2 | GEPA-optimized baseline | 35B-A3B | — | ✓ | — | — | — |
+| 3 | GEPA + Loop (single-prior) | 35B-A3B | Single | ✓ | — | — | — |
+| 4 | GEPA + Loop (all-prior) | 35B-A3B | All | ✓ | — | — | — |
+| 5 | GEPA + Advisor + Loop | 35B-A3B + 27B | Both | ✓ | ✓ | — | — |
+| 6 | GEPA + Advisor + RLM + Loop | 35B-A3B + 27B | Both | ✓ | ✓ | ✓ | — |
+| 7 | Full System (all components) | 35B-A3B + 27B | Both | ✓ | ✓ | ✓ | ✓ |
 
-**Baseline (Treatment 1)** is run N times (suggested: 10-20) to establish a performance distribution. This distribution is the anchor for statistical significance testing on all subsequent treatments.
+**Treatments 1a and 1b** are each run N=20 times to establish performance distributions. T1a is the primary anchor for statistical significance testing on T2–T7. T1b establishes the dense model solo baseline, enabling the headline comparison: *does the full harness (T5+) on the efficient sparse MoE model surpass the dense model running alone?*
+
+**Key pairwise comparisons the ladder enables:**
+| Comparison | What it isolates |
+|---|---|
+| T1a vs T1b | Model architecture effect (sparse MoE vs dense), identical harness |
+| T1a vs T2 | Pure GEPA contribution (no loop) |
+| T2 vs T3 | Pure single-prior loop contribution, on optimized prompts |
+| T3 vs T4 | All-prior vs single-prior context injection |
+| T4 vs T5 | Pure advisor contribution |
+| T1b vs T5 | 27B solo vs 35B-A3B + full harness — efficiency argument |
+| T5 vs T6 | RLM short-term memory contribution |
+| T6 vs T7 | Structured long-term memory vs naive all-prior injection |
 
 ---
 
@@ -281,20 +295,23 @@ A Recursive Language Model subagent with access to the full running context. Pai
 - [x] Implement three-way temporal data split
 - [ ] Build episode index logger and skill artifact storage
 
-### Phase 2 — Baseline & Loop
-- [ ] Run Treatment 1 (baseline, N=20 runs), record distribution
-- [ ] Implement Ralph Wiggum loop (single-prior flavor)
-- [ ] Run Treatment 2
-- [ ] Implement all-prior episode index injection
-- [ ] Run Treatment 3
+### Phase 2 — Baselines
+- [ ] Run Treatment 1a (35B-A3B baseline, N=20 runs), record distribution
+- [ ] Run Treatment 1b (27B baseline, N=20 runs), record distribution
 
 ### Phase 3 — GEPA Optimization
 - [ ] Integrate GEPA library or implement custom GEPA loop
-- [ ] Run GEPA optimization on training partition
+- [ ] Run GEPA optimization on training partition (35B-A3B prompts only)
 - [ ] Lock optimized prompts
-- [ ] Run Treatment 4 (both loop flavors)
+- [ ] Run Treatment 2 (GEPA-optimized baseline, no loop)
 
-### Phase 4 — Advisor & Memory
+### Phase 4 — Loop Treatments
+- [ ] Implement Ralph Wiggum loop (single-prior flavor)
+- [ ] Run Treatment 3
+- [ ] Implement all-prior episode index injection
+- [ ] Run Treatment 4
+
+### Phase 5 — Advisor & Memory
 - [ ] Implement advisor escalation pattern in LangGraph
 - [ ] Run Treatment 5
 - [ ] Implement RLM subagent + compaction middleware
@@ -302,7 +319,7 @@ A Recursive Language Model subagent with access to the full running context. Pai
 - [ ] Implement long-term memory subagent (Mem0 + post-episode reflection node)
 - [ ] Run Treatment 7
 
-> **Scope note:** Treatments 1–5 are the load-bearing contributions for publication. Treatments 6–7 strengthen the paper but could be deferred to follow-on work if implementation scope becomes prohibitive. Decide at the end of Phase 3.
+> **Scope note:** Treatments 1a, 1b, 2–5 are the load-bearing contributions for publication. Treatments 6–7 strengthen the paper but could be deferred to follow-on work if implementation scope becomes prohibitive. Decide at the end of Phase 4.
 
 ### Phase 5 — Evaluation & Paper
 - [ ] Run all variants on final holdout OOT
@@ -320,8 +337,10 @@ A Recursive Language Model subagent with access to the full running context. Pai
 |---|---|
 | Three-way data split | Prevents adaptive overfitting of long-term memory to OOT population |
 | Ralph Wiggum as universal harness | Enables cost/iteration comparison across all variants on equal footing |
-| GEPA before loop, not during | Eliminates confound between prompt optimization and loop performance measurement |
-| Sparse MoE primary + dense advisor | Tests whether architectural diversity (not just scale) improves reasoning |
+| GEPA before loops (T2), not during | Eliminates confound between prompt optimization and loop performance measurement; all loop comparisons are on optimized prompts, preventing dismissal of loop gains as "compensating for bad prompts" |
+| Dual baseline (T1a: 35B-A3B, T1b: 27B) | Isolates model architecture effect under identical harness; enables T1b vs T5 headline comparison: does sparse MoE + full harness beat dense model solo? |
+| 35B-A3B as primary for T2–T7 | Preserves the efficiency story: sparse MoE activates ~3B params per token; advisor pattern only makes sense with a fast/cheap primary |
+| Sparse MoE primary + dense advisor | Tests whether architectural diversity (not just scale) improves reasoning; advisor is only invoked selectively, keeping bulk token cost at MoE rates |
 | P&L as primary metric | Grounds results in economic reality rather than model accuracy proxies |
 | Capital cap + volume floor | Cap prevents cherry-picking; floor forces agent into full viable credit spectrum |
 | Single-prior vs. all-prior loop | Tests local optima trapping; sharpens contrast between naive context injection and structured memory |

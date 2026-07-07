@@ -58,8 +58,8 @@ The agent is tasked with designing a Python-based credit risk assessment and pri
 
 ### LendingClub Loan Data
 - **Source:** Kaggle (publicly available, originally released by LendingClub)
-- **Coverage:** 2007–2018, organized in temporal cohort files
-- **Size:** ~800k+ loan records across all vintages
+- **Coverage:** Apr 2008–Sep 2018 (single compiled file, not annual cohorts)
+- **Size:** 2,260,701 loan records; 104 pre-origination features retained after leakage/PII removal
 
 ### Key Fields
 | Field | Role |
@@ -91,6 +91,13 @@ This yields a proper right-censored survival dataset suitable for Cox PH, discre
 
 **Critical:** The final holdout is not touched until the last evaluation of each agent variant. This prevents adaptive overfitting — particularly important for the long-term memory variant, which could otherwise learn the specific characteristics of the OOT population across hundreds of loop iterations (a form of indirect leakage).
 
+**Observed split sizes and event rates:**
+| Partition | Rows | Event Rate | Note |
+|---|---|---|---|
+| Training | 466,344 | 16.6% | Fully matured loans |
+| Validation OOT | 855,491 | 16.8% | Fully matured loans |
+| Final Holdout | 938,793 | 5.1% | Lower rate due to loan maturity — 2017–2018 cohort had insufficient time to fully charge off at data snapshot. Correct for evaluation; survival model trained on mature loans. |
+
 ---
 
 ## Customer Sensitivity Model
@@ -109,7 +116,24 @@ P(accept | applicant, offer) = sigmoid(
     + ε
 )
 ```
-β coefficients calibrated to produce plausible acceptance behavior (30–60% average acceptance, meaningfully sensitive to rate). Calibration draws on published research on consumer loan price elasticity.
+β coefficients calibrated to produce plausible acceptance behavior (30–60% average acceptance, meaningfully sensitive to rate). Calibration is informed by Karlan & Zinman (2008), who find consumer loan demand is relatively inelastic at market rates but becomes highly elastic above-market — consistent with our logistic formulation where `BETA_SPREAD` creates a sharp acceptance cliff at above-market pricing.
+
+**Implemented parameters (see `data_pipeline/sensitivity_model.py`):**
+- `COST_OF_CAPITAL = 0.16`, `SERVICING_MARGIN = 0.03`, `EXPECTED_LOSS_BUFFER = 0.02` → `MIN_VIABLE_RATE = 0.21`
+- `ALPHA_0 = 0.20`, `BETA_SPREAD = 12.0`, `BETA_BURDEN = 1.5`, `BETA_MATCH = 0.50`, `NOISE_STD = 0.30`
+- Serialized to `data/processed/sensitivity_model.pkl`
+
+**Calibrated acceptance rates:**
+| Grade | Market Rate | @ Market | @ Min Viable | @ Market+5pp |
+|---|---|---|---|---|
+| A | 9.5% | 0% (below floor) | 27% | 0% (below floor) |
+| B | 14.0% | 0% (below floor) | 38% | 0% (below floor) |
+| C | 19.0% | 0% (below floor) | 52% | 44% |
+| D | 24.0% | 59% | 58% | 44% |
+| E | 29.5% | 59% | 59% | 44% |
+| F/G | 34–37% | 58% | 58% | 44% |
+
+**Fairness note:** `zip_code` is retained as a feature. It is predictive (local economic conditions correlate with default risk) but carries disparate impact risk due to historical redlining patterns. If the agent relies heavily on this feature, it warrants discussion in the paper's limitations section.
 
 **Cost of capital / competitive rate floor:** The simulation explicitly models a non-bank fintech lender with a high cost of capital (e.g., 16% blended warehouse + ABS funding). This imposes a minimum viable offer rate:
 
@@ -135,7 +159,12 @@ Cost of capital is given to the agent as an explicit known constraint (not infer
 - Made available as a tool the agent can call during pricing optimization
 - Held fixed across all experimental variants (not re-trained between episodes)
 
-**Portfolio constraint:** The agent operates under a **capital cap + minimum volume floor**. The cap (maximum total principal deployed) prevents unlimited cherry-picking. The volume floor (minimum number of loans funded) prevents the degenerate strategy of approving only the 5 safest loans at extreme margin, forcing the agent to navigate the full viable credit spectrum. Exact parameter values TBD pending distribution analysis on the training partition.
+**Portfolio constraint:** The agent operates under a **capital cap + minimum volume floor**. The cap (maximum total principal deployed) prevents unlimited cherry-picking. The volume floor (minimum number of loans funded) prevents the degenerate strategy of approving only the 5 safest loans at extreme margin, forcing the agent to navigate the full viable credit spectrum.
+
+**Baseline parameters (tunable via `configs/base.yaml`):**
+- Capital cap: **$15,000,000** per episode
+- Volume floor: **400 loans** minimum per episode
+- Applicant pool: **~1,000 applicants** per episode
 
 ---
 
@@ -244,12 +273,12 @@ A Recursive Language Model subagent with access to the full running context. Pai
 ## Implementation Plan
 
 ### Phase 1 — Infrastructure
-- [ ] Set up vLLM serving both models on GX10
+- [x] Set up vLLM serving both models on GX10
 - [ ] Build LangGraph DeepAgent scaffold with tool definitions
 - [ ] Implement controlled Python sandbox with filesystem
-- [ ] Build and calibrate synthetic customer sensitivity model (parameterize CoC floor, market rate tiers, β coefficients)
-- [ ] Construct survival target variables from LendingClub dataset
-- [ ] Implement three-way temporal data split
+- [x] Build and calibrate synthetic customer sensitivity model (parameterize CoC floor, market rate tiers, β coefficients)
+- [x] Construct survival target variables from LendingClub dataset
+- [x] Implement three-way temporal data split
 - [ ] Build episode index logger and skill artifact storage
 
 ### Phase 2 — Baseline & Loop
@@ -305,7 +334,7 @@ A Recursive Language Model subagent with access to the full running context. Pai
 
 ## Open Questions & Future Work
 
-- Capital cap and volume floor exact values — needs distribution analysis on training partition to calibrate
+- Capital cap and volume floor set to $15M / 400 loans as baseline — may need tuning after Treatment 1 baseline runs reveal agent behavior
 - Whether GEPA should optimize per-subagent prompts independently or the full compound system
 - Whether the reflection agent should run post-episode (cleaner) or on a timer (more autonomous)
 - Extension to multi-agent competitive setting (multiple pricing agents competing for same borrower pool)
@@ -324,3 +353,4 @@ A Recursive Language Model subagent with access to the full running context. Pai
 - AMA-Bench (ICLR 2026 Memory Workshop)
 - Mem0 — Open source long-term memory layer for AI agents (github.com/mem-labs/mem0)
 - Langfuse — Open source LLM observability and evaluation (langfuse.com; MIT licensed)
+- Karlan, D. & Zinman, J. (2008). Elasticities of Demand for Consumer Credit. Yale Economic Growth Center Discussion Paper No. 926. — Basis for sensitivity model calibration; establishes that demand is inelastic at market rates but highly elastic above-market.

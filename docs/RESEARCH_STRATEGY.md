@@ -228,24 +228,28 @@ GEPA runs immediately after the baselines (Treatment 2), before any loop treatme
 
 Each treatment is a cumulative addition to the prior level. Treatments 3–7 all run on GEPA-optimized prompts (locked after Treatment 2).
 
-| # | Variant | Model | Loop | GEPA | Advisor | RLM STM | LT Memory |
-|---|---|---|---|---|---|---|---|
-| 1a | Baseline DeepAgent | 35B-A3B | — | — | — | — | — |
-| 1b | Baseline DeepAgent | 27B | — | — | — | — | — |
-| 2 | GEPA-optimized baseline | 35B-A3B | — | ✓ | — | — | — |
-| 3 | GEPA + Loop (single-prior) | 35B-A3B | Single | ✓ | — | — | — |
-| 4 | GEPA + Loop (all-prior) | 35B-A3B | All | ✓ | — | — | — |
-| 5 | GEPA + Advisor + Loop | 35B-A3B + 27B | Both | ✓ | ✓ | — | — |
-| 6 | GEPA + Advisor + RLM + Loop | 35B-A3B + 27B | Both | ✓ | ✓ | ✓ | — |
-| 7 | Full System (all components) | 35B-A3B + 27B | Both | ✓ | ✓ | ✓ | ✓ |
+| # | Variant | Framework | Model | Loop | GEPA | Advisor | RLM STM | LT Memory |
+|---|---|---|---|---|---|---|---|---|
+| 0 | Vanilla ReAct | `create_agent()` | 35B-A3B | — | — | — | — | — |
+| 1a | DeepAgent (batteries on) | `create_deep_agent()` | 35B-A3B | — | — | — | — | — |
+| 1b | DeepAgent (batteries on) | `create_deep_agent()` | 27B | — | — | — | — | — |
+| 2 | GEPA-optimized DeepAgent | `create_deep_agent()` | 35B-A3B | — | ✓ | — | — | — |
+| 3 | GEPA + Loop (single-prior) | `create_deep_agent()` | 35B-A3B | Single | ✓ | — | — | — |
+| 4 | GEPA + Loop (all-prior) | `create_deep_agent()` | 35B-A3B | All | ✓ | — | — | — |
+| 5 | GEPA + Advisor + Loop | `create_deep_agent()` | 35B-A3B + 27B | All | ✓ | ✓ | — | — |
+| 6 | GEPA + Advisor + RLM + Loop | `create_deep_agent()` | 35B-A3B + 27B | All | ✓ | ✓ | ✓ | — |
+| 7 | Full System (all components) | `create_deep_agent()` | 35B-A3B + 27B | All | ✓ | ✓ | ✓ | ✓ |
 
-**Treatments 1a and 1b** are each run N=20 times to establish performance distributions. T1a is the primary anchor for statistical significance testing on T2–T7. T1b establishes the dense model solo baseline, enabling the headline comparison: *does the full harness (T5+) on the efficient sparse MoE model surpass the dense model running alone?*
+**T0, T1a, T1b, and T2** are each run N=20 independent episodes (no loop) to establish performance distributions. T1a is the primary anchor for statistical significance testing on T2–T7. T1b establishes the dense model solo baseline, enabling the headline comparison: *does the full harness (T5+) on the efficient sparse MoE model surpass the dense model running alone?*
+
+**Loop mode for T5–T7:** T3 vs T4 establishes which loop mode wins. T5–T7 use the winner (expected: all-prior). If T3 surprises, a T5a single-prior variant can be run as a follow-on.
 
 **Key pairwise comparisons the ladder enables:**
 | Comparison | What it isolates |
 |---|---|
+| T0 vs T1a | Full DeepAgent battery value (todos, filesystem, summarization, subagents) vs vanilla ReAct |
 | T1a vs T1b | Model architecture effect (sparse MoE vs dense), identical harness |
-| T1a vs T2 | Pure GEPA contribution (no loop) |
+| T1a vs T2 | Pure GEPA prompt optimization contribution |
 | T2 vs T3 | Pure single-prior loop contribution, on optimized prompts |
 | T3 vs T4 | All-prior vs single-prior context injection |
 | T4 vs T5 | Pure advisor contribution |
@@ -258,19 +262,24 @@ Each treatment is a cumulative addition to the prior level. Treatments 3–7 all
 ## Agent Architecture
 
 ### Framework
-- **Orchestration:** LangGraph DeepAgent architecture
-- **Inference:** vLLM on GX10, local endpoint
+- **T0 orchestration:** LangChain `create_agent()` (vanilla ReAct, v1.x) — no batteries, fully custom tool set
+- **T1–T7 orchestration:** LangChain `create_deep_agent()` (deepagents v0.6+) — batteries included, custom supplementary tools layered on top
+- **Inference:** vLLM on GX10, local OpenAI-compatible endpoint
 - **Observability:** Langfuse (MIT licensed, self-hostable; first-class LangGraph integration for trace logging, cost tracking, and dataset evaluation)
 - **Sandbox:** Controlled Python execution environment with filesystem access
 
 ### Agent Tools
-| Tool | Description |
-|---|---|
-| `code_executor` | Run Python in controlled sandbox |
-| `filesystem` | Read/write artifacts, models, skill files |
-| `sensitivity_model` | Call customer acceptance model with applicant + offer features |
-| `query_long_term_memory` | (Treatment 7 only) Subagent interface to structured learning store |
-| `advisor_consult` | (Treatments 5-7) Escalate to Qwen3.6-27B advisor |
+| Tool | Present in | Description |
+|---|---|---|
+| `code_executor` | T0–T7 | Python sandbox with project PYTHONPATH; custom-built for our data stack |
+| `filesystem_read/write` | T0 only | Custom tools with explicit path controls (replaced by deepagents built-ins in T1+) |
+| `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` | T1–T7 | deepagents built-in filesystem tools (scoped to skill_dir + data/ via FilesystemPermission) |
+| `execute` | T1–T7 | deepagents built-in shell execution |
+| `write_todos` | T1–T7 | deepagents built-in todo list |
+| `task` | T1–T7 | deepagents built-in subagent spawning |
+| `sensitivity_model` | T0–T7 | Call customer acceptance model with applicant + offer features |
+| `advisor_consult` | T5–T7 | Escalate to Qwen3.6-27B advisor |
+| `query_long_term_memory` | T7 only | Subagent interface to Mem0 structured learning store |
 
 ### Short-Term Memory (RLM Subagent, Treatments 6-7)
 A Recursive Language Model subagent with access to the full running context. Paired with aggressive compaction middleware to prevent context window bloat while preserving coherence across long episodes.
@@ -288,16 +297,17 @@ A Recursive Language Model subagent with access to the full running context. Pai
 
 ### Phase 1 — Infrastructure
 - [x] Set up vLLM serving both models on GX10
-- [ ] Build LangGraph DeepAgent scaffold with tool definitions
-- [ ] Implement controlled Python sandbox with filesystem
+- [x] Build agent scaffold: `create_agent()` (T0) and `create_deep_agent()` (T1–T7) with tool definitions
+- [x] Implement controlled Python sandbox with filesystem (`code_executor` tool)
 - [x] Build and calibrate synthetic customer sensitivity model (parameterize CoC floor, market rate tiers, β coefficients)
 - [x] Construct survival target variables from LendingClub dataset
 - [x] Implement three-way temporal data split
-- [ ] Build episode index logger and skill artifact storage
+- [x] Build episode index logger and skill artifact storage (Ralph Wiggum loop + JSONL index)
 
 ### Phase 2 — Baselines
-- [ ] Run Treatment 1a (35B-A3B baseline, N=20 runs), record distribution
-- [ ] Run Treatment 1b (27B baseline, N=20 runs), record distribution
+- [ ] Run Treatment 0 (vanilla create_agent, N=20 runs), record distribution
+- [ ] Run Treatment 1a (deepagent 35B-A3B, N=20 runs), record distribution
+- [ ] Run Treatment 1b (deepagent 27B, N=20 runs), record distribution
 
 ### Phase 3 — GEPA Optimization
 - [ ] Integrate GEPA library or implement custom GEPA loop
@@ -335,6 +345,9 @@ A Recursive Language Model subagent with access to the full running context. Pai
 
 | Decision | Rationale |
 |---|---|
+| T0: `create_agent()` vanilla baseline | Zero-effort ceiling — shows what deepagents batteries add before any custom ablation components enter. Publishable at LangChain-adjacent venues as a framework evaluation. |
+| T1–T7: `create_deep_agent()` | Batteries-included baseline; our ablation components layer on top. FilesystemPermission scopes built-in tools to skill_dir and data/. |
+| T5–T7 use all-prior loop only | T3 vs T4 establishes which loop mode wins; subsequent treatments use the winner to keep the comparison clean. T5a (single-prior + advisor) can be run as a follow-on if interaction effects are of interest. |
 | Three-way data split | Prevents adaptive overfitting of long-term memory to OOT population |
 | Ralph Wiggum as universal harness | Enables cost/iteration comparison across all variants on equal footing |
 | GEPA before loops (T2), not during | Eliminates confound between prompt optimization and loop performance measurement; all loop comparisons are on optimized prompts, preventing dismissal of loop gains as "compensating for bad prompts" |

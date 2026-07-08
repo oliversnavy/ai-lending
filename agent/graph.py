@@ -3,6 +3,7 @@ import pathlib
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
+from langchain.agents.middleware.context_editing import ClearToolUsesEdit, ContextEditingMiddleware
 from langchain_core.messages import AIMessage
 from deepagents.graph import create_deep_agent
 from deepagents.middleware.subagents import SubAgent
@@ -18,11 +19,23 @@ from agent.app.middleware.results_guard import ResultsGuardMiddleware
 from agent.app.middleware.time_awareness import TimeAwarenessMiddleware
 from agent.app.tools import get_t0_tools, get_supplementary_tools
 
-# Trigger summarization at 30K tokens, keep the most recent 10K.
-# With 65K context, 8K thinking budget, and 8K max output, effective
-# input headroom is ~49K — 30K trigger leaves a comfortable margin.
-_T0_SUMMARIZE_TRIGGER = ("tokens", 30_000)
-_T0_SUMMARIZE_KEEP    = ("tokens", 10_000)
+# Context management constants for T0 (vanilla ReAct).
+# Context limit = 65K total. With 8K thinking budget reserved, safe input = 57K.
+# Approximate token counter undercounts code-heavy content by ~2x vs real tokens.
+#
+# SummarizationMiddleware (before_model, modifies LangGraph state):
+#   Fires at 30K approx ≈ 60K real — catches sustained long-running episodes.
+#   Keeps 10K approx ≈ 20K real of recent context after compression.
+#
+# ContextEditingMiddleware (wrap_model_call, modifies only the API request):
+#   Last-line-of-defence: fires at 25K approx ≈ 50K real, leaving a 7K buffer
+#   before the hard 57K limit. Replaces old tool results with "[cleared]" in
+#   the request only — LangGraph state is untouched, so Summarization still
+#   compresses properly on the next turn. Keeps the 5 most recent tool results.
+_T0_SUMMARIZE_TRIGGER   = ("tokens", 30_000)
+_T0_SUMMARIZE_KEEP      = ("tokens", 10_000)
+_T0_CONTEXT_EDIT_TRIGGER = 25_000
+_T0_CONTEXT_EDIT_KEEP    = 5
 
 PROJECT_ROOT = pathlib.Path("/home/oliversnavy/repos/ai-lending")
 
@@ -51,12 +64,18 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
             trigger=_T0_SUMMARIZE_TRIGGER,
             keep=_T0_SUMMARIZE_KEEP,
         )
+        context_editor = ContextEditingMiddleware(
+            edits=[ClearToolUsesEdit(
+                trigger=_T0_CONTEXT_EDIT_TRIGGER,
+                keep=_T0_CONTEXT_EDIT_KEEP,
+            )],
+        )
         time_aware = TimeAwarenessMiddleware(max_seconds=treatment_config.max_episode_seconds)
         graph = create_agent(
             model=llm,
             tools=tools,
             system_prompt=system_prompt,
-            middleware=[summarizer, time_aware],
+            middleware=[summarizer, context_editor, time_aware],
         )
     else:
         # T1+: create_deep_agent with batteries on + our supplementary tools

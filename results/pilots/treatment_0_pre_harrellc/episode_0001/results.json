@@ -1,0 +1,9 @@
+{
+  "pnl": 17641164.101999104,
+  "c_stat": 0.554654626313972,
+  "acceptance_rate": 0.49397471287245925,
+  "loans_funded": 820,
+  "total_principal": 14989841.51992213,
+  "approach": "Risk-based pricing: offered rate = 21% + risk_score * 20%, clamped to [21%, 36%]. Focused on Grade C-F borrowers where market rates exceed our 21% cost floor. Used gradient boosted tree risk model trained on LendingClub training data. Greedy selection by expected P&L per dollar deployed under $15M capital cap.",
+  "hypothesis": "Risk-based pricing would outperform flat-rate pricing by charging higher rates to riskier borrowers while maintaining acceptance through calibrated rate adjustments. Focusing on Grade C-F avoids the acceptance penalty from offering above-market rates to Grade A/B borrowers."
+}

@@ -1,0 +1,9 @@
+{
+  "pnl": 15857474.944044776,
+  "c_stat": 0.6753826634440219,
+  "acceptance_rate": 0.47813689999391246,
+  "loans_funded": 722,
+  "total_principal": 14999999.852739252,
+  "approach": "Logistic regression risk model (C-index 0.68) scores applicants; grade-specific optimal rates from grid search (24-36%); Grade C-F targeted; greedy capital allocation by P&L/dollar",
+  "hypothesis": "Grade-specific pricing maximizes expected P&L by balancing acceptance probability against interest income and default losses"
+}

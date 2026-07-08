@@ -42,32 +42,35 @@ def run_episode(
     final_state: dict = {"messages": []}
     log.info("[T%s ep%04d] Starting episode", treatment_config.treatment, episode_id)
 
-    for chunk in graph.stream(
-        {"messages": [HumanMessage(content=initial_message)]},
-        config=config,
-        stream_mode="updates",
-    ):
-        for node, delta in chunk.items():
-            if not delta:
-                continue
-            for msg in delta.get("messages", []):
-                if isinstance(msg, AIMessage):
-                    calls = getattr(msg, "tool_calls", [])
-                    if calls:
-                        for tc in calls:
-                            args_preview = str(tc.get("args", {}))[:120]
-                            log.info("  [model→tool] %s(%s)", tc["name"], args_preview)
-                    elif msg.content:
-                        preview = str(msg.content)[:200].replace("\n", " ")
-                        log.info("  [model→done] %s", preview)
-                elif isinstance(msg, HumanMessage) and msg.additional_kwargs.get("lc_source") == "summarization":
-                    log.info("  [summarize ] context compressed — history trimmed")
-                elif isinstance(msg, ToolMessage):
-                    result_preview = str(msg.content)[:120].replace("\n", " ")
-                    log.info("  [tool→model] %s → %s", msg.name, result_preview)
-            # accumulate final state
-            if "messages" in delta:
-                final_state["messages"] = final_state["messages"] + delta["messages"]
+    try:
+        for chunk in graph.stream(
+            {"messages": [HumanMessage(content=initial_message)]},
+            config=config,
+            stream_mode="updates",
+        ):
+            for node, delta in chunk.items():
+                if not delta:
+                    continue
+                for msg in delta.get("messages", []):
+                    if isinstance(msg, AIMessage):
+                        calls = getattr(msg, "tool_calls", [])
+                        if calls:
+                            for tc in calls:
+                                args_preview = str(tc.get("args", {}))[:120]
+                                log.info("  [model→tool] %s(%s)", tc["name"], args_preview)
+                        elif msg.content:
+                            preview = str(msg.content)[:200].replace("\n", " ")
+                            log.info("  [model→done] %s", preview)
+                    elif isinstance(msg, HumanMessage) and msg.additional_kwargs.get("lc_source") == "summarization":
+                        log.info("  [summarize ] context compressed — history trimmed")
+                    elif isinstance(msg, ToolMessage):
+                        result_preview = str(msg.content)[:120].replace("\n", " ")
+                        log.info("  [tool→model] %s → %s", msg.name, result_preview)
+                # accumulate final state
+                if "messages" in delta:
+                    final_state["messages"] = final_state["messages"] + delta["messages"]
+    except Exception as e:
+        log.error("[T%s ep%04d] Episode crashed: %s", treatment_config.treatment, episode_id, e)
 
     duration_s = time.time() - t0
     log.info("[T%s ep%04d] Done in %.1fs", treatment_config.treatment, episode_id, duration_s)

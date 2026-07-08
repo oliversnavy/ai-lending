@@ -1,0 +1,9 @@
+{
+  "pnl": 21679478.57,
+  "c_stat": 0.6784,
+  "acceptance_rate": 0.4142,
+  "loans_funded": 730,
+  "total_principal": 14993910.77,
+  "approach": "Logistic regression risk model trained on 466K train loans, scored 855K val loans; risk-based pricing mapping risk scores to rates 21-36% using grade market rates + risk multiplier; greedy selection by P&L per dollar deployed under $15M cap.",
+  "hypothesis": "Risk-based pricing that charges higher rates to riskier borrowers (higher default probability) will maximize P&L by capturing more interest from riskier segments while still maintaining acceptable acceptance rates."
+}

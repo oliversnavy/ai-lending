@@ -87,7 +87,9 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
         # FilesystemPermission is incompatible with LocalShellBackend (deepagents
         # limitation), so we rely on system-prompt guidance instead of tool-level
         # path restrictions — acceptable for a single-user research environment.
-        backend = LocalShellBackend(root_dir=str(skill_dir), virtual_mode=False, inherit_env=True)
+        # 180s execute timeout: forces agent toward faster approaches (LR, sampling)
+        # rather than burning 600s on full-dataset GBM/grid-search that repeatedly times out.
+        backend = LocalShellBackend(root_dir=str(skill_dir), virtual_mode=False, inherit_env=True, timeout=180)
         guardrails = HarnessGuardrailsMiddleware(
             skill_dir=skill_dir,
             data_dir=PROJECT_ROOT / "data" / "processed",

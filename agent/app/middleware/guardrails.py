@@ -23,9 +23,10 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 log = logging.getLogger(__name__)
 
 # Shell patterns that are never allowed, regardless of path.
-# Ordered most-specific first so the first match wins for logging.
+# Note: bare `rm` (single file) within skill_dir is handled separately in
+# _check_command() and is allowed. Only recursive/force deletes are caught here.
 _BLOCKED_SHELL_PATTERNS: list[tuple[str, str]] = [
-    (r"\brm\s", "rm is not allowed — delete files manually if needed"),
+    (r"\brm\s+-[rRfFiI]*[rR][rRfFiI]*\b", "rm -r/-rf is not allowed — only single-file rm within your working directory is permitted"),
     (r"\brmdir\b", "rmdir is not allowed"),
     (r"\bcurl\b", "network access via curl is not allowed"),
     (r"\bwget\b", "network access via wget is not allowed"),
@@ -71,7 +72,8 @@ class HarnessGuardrailsMiddleware(AgentMiddleware):
     """
 
     def __init__(self, skill_dir: pathlib.Path, data_dir: pathlib.Path) -> None:
-        self._allowed_write = str(skill_dir.resolve())
+        self._skill_dir = skill_dir.resolve()
+        self._allowed_write = str(self._skill_dir)
         self._data_dir = str(data_dir.resolve())
 
     # ------------------------------------------------------------------
@@ -140,6 +142,23 @@ class HarnessGuardrailsMiddleware(AgentMiddleware):
         return None
 
     def _check_command(self, command: str) -> str | None:
+        # Special case: bare `rm <path>` — allow within skill_dir, block outside.
+        # This lets the agent delete its own working files (e.g., to replace a script)
+        # without being able to touch harness code or system files.
+        bare_rm = re.search(r'\brm\s+(?!-)([\S]+)', command)
+        if bare_rm and not re.search(r'\brm\s+-', command):
+            target = bare_rm.group(1)
+            if target.startswith('/'):
+                resolved = str(pathlib.Path(target).resolve())
+            else:
+                resolved = str((self._skill_dir / target).resolve())
+            if not resolved.startswith(self._allowed_write):
+                return (
+                    f"rm '{target}' is outside your working directory "
+                    f"({self._allowed_write}). You may only delete files you created."
+                )
+            return None  # rm within skill_dir is allowed
+
         for pattern, reason in _BLOCKED_SHELL_PATTERNS:
             if re.search(pattern, command):
                 return reason

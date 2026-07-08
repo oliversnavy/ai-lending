@@ -1,0 +1,9 @@
+{
+  "pnl": 19096160.777913563,
+  "c_stat": 0.6727775372169296,
+  "acceptance_rate": 0.5392384159886535,
+  "loans_funded": 458,
+  "total_principal": 14999999.457730915,
+  "approach": "Logistic regression default model (C-index=0.673) with risk-based pricing; offer rate = base_rate + (default_prob - 0.18)*15 * multiplier, optimized over grid (35-50) with $15M capital cap",
+  "hypothesis": "Risk-based pricing with multiplier ~41 balances acceptance probability against expected default losses, maximizing portfolio P&L within the 21-36% rate band"
+}

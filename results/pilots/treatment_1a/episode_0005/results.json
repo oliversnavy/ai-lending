@@ -1,0 +1,9 @@
+{
+  "pnl": 21224206.217760205,
+  "c_stat": 0.6526766678189796,
+  "acceptance_rate": 0.46937823353743463,
+  "loans_funded": 719,
+  "total_principal": 14997360.771526786,
+  "approach": "Logistic regression risk model on 200k subsample, per-grade optimal rate selection (21-36%) via sensitivity model to maximize expected P&L under $15M capital cap, filtering to C-F grades",
+  "hypothesis": "C-F grade borrowers with risk-adjusted pricing between 21-36% will yield positive P&L while meeting capital and volume constraints"
+}

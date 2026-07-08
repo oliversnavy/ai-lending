@@ -1,0 +1,9 @@
+{
+  "pnl": 20352018.35786283,
+  "c_stat": 0.689685494158752,
+  "acceptance_rate": 0.3268091989059048,
+  "loans_funded": 457,
+  "total_principal": 14989495.432744762,
+  "approach": "Gradient boosted classifier trained on 31 features from LendingClub data, pricing with grade-based base rates (35-45%) plus small risk premium (5% of default prob), targeting C-G grades where our 16% cost of capital floor makes offers viable.",
+  "hypothesis": "Higher interest rates on riskier borrowers generate more P&L despite lower acceptance rates, because the interest income more than compensates for expected losses."
+}

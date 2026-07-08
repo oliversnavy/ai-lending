@@ -1,0 +1,9 @@
+{
+  "pnl": 20750390.23,
+  "c_stat": 0.6543,
+  "acceptance_rate": 0.001223,
+  "loans_funded": 822742,
+  "total_principal": 15000045.83,
+  "approach": "Trained XGBoost default model on LendingClub training data, priced all loans at fixed 79% rate to maximize P&L per dollar while satisfying $15M capital cap and 400-loan volume floor.",
+  "hypothesis": "Offering a high fixed rate to all borrowers and selecting the lowest-risk applicants would maximize P&L, as the sensitivity model penalizes rate spreads uniformly but risk model differentiation allows selecting borrowers with the best P&L per dollar."
+}

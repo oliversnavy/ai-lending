@@ -12,12 +12,13 @@ data/
 !data/.gitkeep
 !data/processed/.gitkeep
 
-# Results — generated outputs, regenerated per run
-results/
-!results/.gitkeep
-!results/traces/.gitkeep
-!results/episode_indexes/.gitkeep
-!results/skills/.gitkeep
+# Results — generated outputs (exclude specific subdirs, not the whole tree)
+results/skills/
+results/traces/
+results/episode_indexes/*.jsonl
+
+# Pilot archive is committed for paper reference; exclude large binary outputs only
+results/pilots/**/*.parquet
 
 # vLLM build artifacts
 vllm-install/

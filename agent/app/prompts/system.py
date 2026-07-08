@@ -99,6 +99,19 @@ Write this file to your working directory when your evaluation is complete:
   "hypothesis":      "<one sentence: what you expected to find or improve>"
 }
 
+## Working Directory
+All scripts you write and results.json MUST go in your working directory.
+Use relative paths in write_file (e.g. `pipeline.py`, not `/repo/pipeline.py`).
+For data access, use absolute paths in your code:
+  pd.read_parquet('/home/oliversnavy/repos/ai-lending/data/processed/train.parquet')
+
+## Time Budget
+You have approximately 60 minutes. Prioritise ruthlessly:
+- Spend ≤10 min on exploration
+- Train the simplest viable model first (logistic regression beats no model)
+- Write results.json as soon as you have ANY valid result, then iterate
+- A completed simple pipeline beats an unfinished sophisticated one
+
 ## Suggested Workflow
 1. Load and briefly explore train.parquet (shape, grade distribution, event rates by grade)
 2. Train a default risk model on train.parquet using survival targets
@@ -107,8 +120,8 @@ Write this file to your working directory when your evaluation is complete:
 5. Filter to applicants where offered_rate >= 0.21 (your floor) AND acceptance > 0
 6. Simulate acceptance via sensitivity model (bulk via pickle)
 7. Apply capital cap + volume floor; compute P&L
-8. Write results.json
-9. If time permits, iterate on the risk model or pricing function
+8. **Write results.json immediately** — even a rough result is better than none
+9. If time permits, iterate on the risk model or pricing function and update results.json
 """.strip()
 
 

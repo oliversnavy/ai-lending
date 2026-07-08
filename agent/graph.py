@@ -15,6 +15,7 @@ from agent.app.models.episode import TreatmentConfig
 from agent.app.prompts.gepa import get_optimised_prompt
 from agent.app.prompts.system import get_system_prompt
 from agent.app.middleware.guardrails import HarnessGuardrailsMiddleware
+from agent.app.middleware.overflow_recovery import OverflowRecoveryMiddleware
 from agent.app.middleware.results_guard import ResultsGuardMiddleware
 from agent.app.middleware.time_awareness import TimeAwarenessMiddleware
 from agent.app.tools import get_t0_tools, get_supplementary_tools
@@ -70,12 +71,16 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
                 keep=_T0_CONTEXT_EDIT_KEEP,
             )],
         )
+        overflow_recovery = OverflowRecoveryMiddleware()
         time_aware = TimeAwarenessMiddleware(max_seconds=treatment_config.max_episode_seconds)
+        # Middleware ordering matters for wrap_model_call: last = innermost wrapper.
+        # overflow_recovery is last so it sits closest to the actual API call and
+        # catches real 400 errors before context_editor or summarizer see them.
         graph = create_agent(
             model=llm,
             tools=tools,
             system_prompt=system_prompt,
-            middleware=[summarizer, context_editor, time_aware],
+            middleware=[summarizer, context_editor, time_aware, overflow_recovery],
         )
     else:
         # T1+: create_deep_agent with batteries on + our supplementary tools

@@ -14,6 +14,7 @@ from agent.app.models.episode import TreatmentConfig
 from agent.app.prompts.gepa import get_optimised_prompt
 from agent.app.prompts.system import get_system_prompt
 from agent.app.middleware.guardrails import HarnessGuardrailsMiddleware
+from agent.app.middleware.results_guard import ResultsGuardMiddleware
 from agent.app.tools import get_t0_tools, get_supplementary_tools
 
 # Trigger summarization at 30K tokens, keep the most recent 10K.
@@ -89,13 +90,14 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
             skill_dir=skill_dir,
             data_dir=PROJECT_ROOT / "data" / "processed",
         )
+        results_guard = ResultsGuardMiddleware(skill_dir=skill_dir, max_retries=1)
         graph = create_deep_agent(
             model=llm,
             tools=tools,
             system_prompt=system_prompt,
             subagents=[subagent],
             backend=backend,
-            middleware=[guardrails],
+            middleware=[guardrails, results_guard],
         )
 
     return graph, callbacks

@@ -50,12 +50,16 @@ def main(treatment: str, n_runs: int | None) -> None:
         start_id = _next_episode_id(treatment)
         print(f"Running Treatment {treatment} — {n} independent episodes (ep {start_id}–{start_id+n-1})")
         from agent.app.agent import run_episode
+        index_path = RESULTS_DIR.parent / "episode_indexes" / f"treatment_{treatment}.jsonl"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
         all_records = []
         for i in range(n):
             episode_id = start_id + i
             print(f"\n=== Run {i + 1}/{n} (ep {episode_id:04d}) ===")
             record = run_episode(config, [], episode_id)
             all_records.append(record)
+            with open(index_path, "a") as f:
+                f.write(record.model_dump_json() + "\n")
             print(f"  P&L: ${record.pnl/1000:.1f}k | C-stat: {record.c_stat:.3f} "
                   f"| Tokens: {record.tokens_used:,}")
     else:

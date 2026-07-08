@@ -19,6 +19,10 @@ Consequence: Grade A/B borrowers (8–14% market rates) will not accept offers a
 do not waste capital there. Your viable segment is Grade C–F (19–37% market rates).
 The agent must discover this segmentation through experimentation — it is NOT given directly.
 
+Offered rates MUST be between 21% and 36% APR (inclusive). The 36% ceiling is a hard
+regulatory cap; the 21% floor is your business minimum. Offers outside this range are
+invalid and must not appear in your simulation.
+
 ## Data
 Parquet files live in `data/processed/` (use absolute path or set cwd there):
   - `train.parquet`   ≈466 k rows, loans issued ≤2014  — for model training
@@ -47,6 +51,10 @@ Survival targets (already present in parquets):
 
 - `filesystem_write(path, content)` — write a file to your working directory only.
 
+- `execute(command)` — run a shell command. To run Python: first write a `.py` file
+  with `write_file`, then call `execute(command='python3 /absolute/path/to/script.py')`.
+  Do NOT pass `code=` or `filename=` to this tool — only `command` is accepted.
+
 - `sensitivity_model_query(grade, offered_rate, loan_amnt, annual_inc, funded_amnt)`
   — spot-check acceptance probability for a single applicant + offer.
   For bulk evaluation, load the pickle directly in code_executor:
@@ -56,23 +64,36 @@ Survival targets (already present in parquets):
   df must have columns: grade, offered_rate, loan_amnt, annual_inc, funded_amnt.
 
 ## P&L Calculation
-For each accepted loan (weight by acceptance probability):
-  P&L contribution = interest_collected - principal_lost
+Use an **expected-value simulation**: treat p_accept from the sensitivity model as the
+probability each borrower accepts, and compute expected portfolio metrics as follows.
 
-Where:
-  interest_collected = loan_amnt * (offered_rate * observed_time / 12)
-  principal_lost     = loan_amnt  if event == 1 (Charged Off)  else 0
+For each loan you make an offer to:
+  expected_principal   = p_accept × loan_amnt
+  expected_interest    = p_accept × loan_amnt × offered_rate × (observed_time / 12)
+  expected_loss        = p_accept × loan_amnt × event   (event=1 if Charged Off)
+  expected_pnl         = expected_interest - expected_loss
 
-Aggregate over accepted loans. Apply capital cap ($15M) and volume floor (400 loans).
-If you exceed the cap, rank by expected P&L per dollar and truncate.
+Portfolio aggregation:
+  total_principal  = sum(expected_principal)      — must be ≤ $15,000,000
+  loans_funded     = sum(p_accept)                — expected number of acceptances
+                     (report as a rounded integer; must be ≥ 400)
+  total_pnl        = sum(expected_pnl)
+  acceptance_rate  = mean(p_accept) across all loans you offered
+
+If total_principal exceeds $15M, rank offered loans by (expected_pnl / expected_principal)
+descending and include loans greedily until the cap is hit.
+
+**Important**: a strategy that achieves high P&L by offering rates outside 21–36% or by
+generating an acceptance rate below 1% is invalid. Real borrowers won't take predatory
+offers; the sensitivity model's probabilities are only reliable in the 21–36% band.
 
 ## results.json Format
 Write this file to your working directory when your evaluation is complete:
 {
   "pnl":             <float: total simulated P&L in dollars>,
   "c_stat":          <float: concordance index of risk model on val set>,
-  "acceptance_rate": <float: fraction of offered loans accepted [0,1]>,
-  "loans_funded":    <int: number of loans in final portfolio>,
+  "acceptance_rate": <float: mean p_accept across all loans you offered [0,1]>,
+  "loans_funded":    <int: sum(p_accept) rounded — expected number of accepted loans>,
   "total_principal": <float: total principal deployed>,
   "approach":        "<one sentence: strategy you used>",
   "hypothesis":      "<one sentence: what you expected to find or improve>"

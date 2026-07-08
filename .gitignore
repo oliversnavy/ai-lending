@@ -30,5 +30,8 @@ notebooks/.ipynb_checkpoints/
 .env
 .env.*
 
+# Agent-generated artifacts (written to project root by T1+ agents)
+pipeline.py
+
 # OS
 .DS_Store

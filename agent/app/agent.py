@@ -1,13 +1,17 @@
 from __future__ import annotations
 import json
+import logging
 import pathlib
 import time
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from .middleware.episode_injector import build_initial_human_message
 from .models.episode import EpisodeRecord, TreatmentConfig
 from ..graph import build_graph
+
+log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
 PROJECT_ROOT = pathlib.Path("/home/oliversnavy/repos/ai-lending")
 RESULTS_DIR = PROJECT_ROOT / "results"
@@ -35,11 +39,38 @@ def run_episode(
 
     config = {"callbacks": callbacks} if callbacks else {}
     t0 = time.time()
-    final_state = graph.invoke(
+    final_state: dict = {"messages": []}
+    log.info("[T%s ep%04d] Starting episode", treatment_config.treatment, episode_id)
+
+    for chunk in graph.stream(
         {"messages": [HumanMessage(content=initial_message)]},
         config=config,
-    )
+        stream_mode="updates",
+    ):
+        for node, delta in chunk.items():
+            if not delta:
+                continue
+            for msg in delta.get("messages", []):
+                if isinstance(msg, AIMessage):
+                    calls = getattr(msg, "tool_calls", [])
+                    if calls:
+                        for tc in calls:
+                            args_preview = str(tc.get("args", {}))[:120]
+                            log.info("  [model→tool] %s(%s)", tc["name"], args_preview)
+                    elif msg.content:
+                        preview = str(msg.content)[:200].replace("\n", " ")
+                        log.info("  [model→done] %s", preview)
+                elif isinstance(msg, HumanMessage) and msg.additional_kwargs.get("lc_source") == "summarization":
+                    log.info("  [summarize ] context compressed — history trimmed")
+                elif isinstance(msg, ToolMessage):
+                    result_preview = str(msg.content)[:120].replace("\n", " ")
+                    log.info("  [tool→model] %s → %s", msg.name, result_preview)
+            # accumulate final state
+            if "messages" in delta:
+                final_state["messages"] = final_state["messages"] + delta["messages"]
+
     duration_s = time.time() - t0
+    log.info("[T%s ep%04d] Done in %.1fs", treatment_config.treatment, episode_id, duration_s)
 
     tokens_used = _count_tokens(final_state.get("messages", []))
 

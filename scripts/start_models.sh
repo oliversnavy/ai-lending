@@ -8,7 +8,7 @@
 #   0.35 / 0.28  →  ~82GB used,  ~28GB free  (default, leaves room for data workload)
 #   0.25 / 0.20  →  ~55GB used,  ~55GB free  (lightweight, other heavy projects running)
 
-GPU_MEM_PRIMARY=${1:-0.40}
+GPU_MEM_PRIMARY=${1:-0.35}
 GPU_MEM_ADVISOR=${2:-0.32}
 
 echo "Starting primary with gpu-memory-utilization=${GPU_MEM_PRIMARY}"
@@ -20,8 +20,9 @@ docker run --gpus all -d \
   vllm serve unsloth/Qwen3.6-35B-A3B-NVFP4 \
   --tokenizer Qwen/Qwen3.6-35B-A3B \
   --dtype bfloat16 \
-  --max-model-len 32768 --host 0.0.0.0 --port 8000 \
-  --gpu-memory-utilization "${GPU_MEM_PRIMARY}"
+  --max-model-len 65536 --host 0.0.0.0 --port 8000 \
+  --gpu-memory-utilization "${GPU_MEM_PRIMARY}" \
+  --enable-auto-tool-choice --tool-call-parser qwen3_xml
 
 echo "Starting advisor with gpu-memory-utilization=${GPU_MEM_ADVISOR}"
 docker run --gpus all -d \
@@ -33,7 +34,8 @@ docker run --gpus all -d \
   --tokenizer Qwen/Qwen3.6-27B \
   --dtype bfloat16 \
   --max-model-len 32768 --host 0.0.0.0 --port 8000 \
-  --gpu-memory-utilization "${GPU_MEM_ADVISOR}"
+  --gpu-memory-utilization "${GPU_MEM_ADVISOR}" \
+  --enable-auto-tool-choice --tool-call-parser qwen3_xml
 
 echo "Waiting for models to load..."
 until docker logs vllm-primary 2>&1 | grep -q "Application startup complete"; do sleep 5; done

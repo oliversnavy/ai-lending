@@ -30,6 +30,11 @@ def get_primary_client(treatment_config: TreatmentConfig) -> ChatOpenAI:
         model=model,
         max_tokens=max_tokens,
         temperature=0.6,
+        # Cap Qwen3 thinking budget: vLLM pre-allocates thinking tokens against
+        # max_model_len at request time. The default (~22K) consumes most of a
+        # 32K window before the first prompt token. 8K gives meaningful CoT
+        # without blowing the budget on a single step.
+        extra_body={"chat_template_kwargs": {"enable_thinking": True, "thinking_budget": 8192}},
     )
 
 

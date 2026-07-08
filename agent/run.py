@@ -19,6 +19,21 @@ import click
 from agent.app.models.episode import TREATMENT_CONFIGS
 from agent.loop import run_loop
 
+RESULTS_DIR = pathlib.Path(__file__).parent.parent / "results" / "skills"
+
+
+def _next_episode_id(treatment: str) -> int:
+    """Return the next episode ID not yet present on disk."""
+    treatment_dir = RESULTS_DIR / f"treatment_{treatment}"
+    if not treatment_dir.exists():
+        return 0
+    existing = sorted(
+        int(p.name.split("_")[1])
+        for p in treatment_dir.iterdir()
+        if p.is_dir() and p.name.startswith("episode_")
+    )
+    return existing[-1] + 1 if existing else 0
+
 
 @click.command()
 @click.option("--treatment", required=True,
@@ -32,12 +47,14 @@ def main(treatment: str, n_runs: int | None) -> None:
 
     if config.is_baseline:
         n = n_runs or 20
-        print(f"Running Treatment {treatment} — {n} independent episodes")
+        start_id = _next_episode_id(treatment)
+        print(f"Running Treatment {treatment} — {n} independent episodes (ep {start_id}–{start_id+n-1})")
         from agent.app.agent import run_episode
         all_records = []
-        for run_idx in range(n):
-            print(f"\n=== Run {run_idx + 1}/{n} ===")
-            record = run_episode(config, [], run_idx)
+        for i in range(n):
+            episode_id = start_id + i
+            print(f"\n=== Run {i + 1}/{n} (ep {episode_id:04d}) ===")
+            record = run_episode(config, [], episode_id)
             all_records.append(record)
             print(f"  P&L: ${record.pnl/1000:.1f}k | C-stat: {record.c_stat:.3f} "
                   f"| Tokens: {record.tokens_used:,}")

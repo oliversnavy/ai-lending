@@ -15,6 +15,7 @@ from agent.app.prompts.gepa import get_optimised_prompt
 from agent.app.prompts.system import get_system_prompt
 from agent.app.middleware.guardrails import HarnessGuardrailsMiddleware
 from agent.app.middleware.results_guard import ResultsGuardMiddleware
+from agent.app.middleware.time_awareness import TimeAwarenessMiddleware
 from agent.app.tools import get_t0_tools, get_supplementary_tools
 
 # Trigger summarization at 30K tokens, keep the most recent 10K.
@@ -50,11 +51,12 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
             trigger=_T0_SUMMARIZE_TRIGGER,
             keep=_T0_SUMMARIZE_KEEP,
         )
+        time_aware = TimeAwarenessMiddleware(max_seconds=treatment_config.max_episode_seconds)
         graph = create_agent(
             model=llm,
             tools=tools,
             system_prompt=system_prompt,
-            middleware=[summarizer],
+            middleware=[summarizer, time_aware],
         )
     else:
         # T1+: create_deep_agent with batteries on + our supplementary tools
@@ -91,13 +93,14 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
             data_dir=PROJECT_ROOT / "data" / "processed",
         )
         results_guard = ResultsGuardMiddleware(skill_dir=skill_dir, max_retries=1)
+        time_aware = TimeAwarenessMiddleware(max_seconds=treatment_config.max_episode_seconds)
         graph = create_deep_agent(
             model=llm,
             tools=tools,
             system_prompt=system_prompt,
             subagents=[subagent],
             backend=backend,
-            middleware=[guardrails, results_guard],
+            middleware=[guardrails, results_guard, time_aware],
         )
 
     return graph, callbacks

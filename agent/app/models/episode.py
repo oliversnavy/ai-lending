@@ -17,6 +17,7 @@ class TreatmentConfig(BaseModel):
     use_rlm: bool = False
     use_ltm: bool = False
     use_deep_agent: bool = True  # False only for T0 (vanilla create_agent)
+    max_episode_seconds: int = 3600  # 60-minute wall-clock budget per episode
 
     @property
     def primary_is_27b(self) -> bool:

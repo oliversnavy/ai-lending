@@ -51,8 +51,10 @@ def _violation_message(tool_name: str, reason: str) -> ToolMessage:
     return ToolMessage(
         content=(
             f"GUARDRAIL BLOCKED [{tool_name}]: {reason}\n"
-            "Adjust your approach: write files only to your working directory, "
-            "and avoid destructive or network shell commands."
+            "Correction guidance:\n"
+            "- To modify an existing file: use edit_file, not rm + write_file\n"
+            "- To write new files: use write_file with a path inside your working directory\n"
+            "- To run shell commands: only python3, standard data-science tools, and read operations are allowed"
         ),
         tool_call_id="__guardrail__",
         status="error",

@@ -13,6 +13,7 @@ from agent.app.clients.vllm import get_primary_client
 from agent.app.models.episode import TreatmentConfig
 from agent.app.prompts.gepa import get_optimised_prompt
 from agent.app.prompts.system import get_system_prompt
+from agent.app.middleware.guardrails import HarnessGuardrailsMiddleware
 from agent.app.tools import get_t0_tools, get_supplementary_tools
 
 # Trigger summarization at 30K tokens, keep the most recent 10K.
@@ -84,12 +85,17 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
         # limitation), so we rely on system-prompt guidance instead of tool-level
         # path restrictions — acceptable for a single-user research environment.
         backend = LocalShellBackend(root_dir=str(skill_dir), virtual_mode=False, inherit_env=True)
+        guardrails = HarnessGuardrailsMiddleware(
+            skill_dir=skill_dir,
+            data_dir=PROJECT_ROOT / "data" / "processed",
+        )
         graph = create_deep_agent(
             model=llm,
             tools=tools,
             system_prompt=system_prompt,
             subagents=[subagent],
             backend=backend,
+            middleware=[guardrails],
         )
 
     return graph, callbacks

@@ -91,13 +91,30 @@ offers; the sensitivity model's probabilities are only reliable in the 21–36% 
 Write this file to your working directory when your evaluation is complete:
 {
   "pnl":             <float: total simulated P&L in dollars>,
-  "c_stat":          <float: concordance index of risk model on val set>,
+  "c_stat":          <float: Harrell's C — see below>,
   "acceptance_rate": <float: mean p_accept across all loans you offered [0,1]>,
   "loans_funded":    <int: sum(p_accept) rounded — expected number of accepted loans>,
   "total_principal": <float: total principal deployed>,
   "approach":        "<one sentence: strategy you used>",
   "hypothesis":      "<one sentence: what you expected to find or improve>"
 }
+
+## Computing c_stat (Harrell's C — required)
+Use Harrell's concordance index, NOT sklearn's roc_auc_score. The val set has censored
+loans (never defaulted during observation window) that roc_auc_score handles incorrectly.
+
+```python
+from lifelines.utils import concordance_index
+# predicted_default_prob: array of model outputs, higher = riskier borrower
+c_stat = concordance_index(
+    val['observed_time'],      # time until default or censoring (months)
+    -predicted_default_prob,   # negate: concordance_index expects higher = longer survival
+    val['event']               # 1 = defaulted, 0 = censored
+)
+```
+
+This only compares pairs where the earlier-ending loan actually defaulted, correctly
+ignoring loans that were merely censored (still paying at observation cutoff).
 
 ## Working Directory
 All scripts you write and results.json MUST go in your working directory.

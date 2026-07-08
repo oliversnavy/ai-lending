@@ -62,7 +62,9 @@ class ResultsGuardMiddleware(AgentMiddleware):
                         "Required format:\n"
                         '{\n'
                         '  "pnl":             <float>,\n'
-                        '  "c_stat":          <float>,\n'
+                        '  "c_stat":          <float — use Harrell\'s C, not roc_auc_score:\n'
+                        '                      from lifelines.utils import concordance_index\n'
+                        '                      c_stat = concordance_index(val["observed_time"], -pred_prob, val["event"])>,\n'
                         '  "acceptance_rate": <float>,\n'
                         '  "loans_funded":    <int>,\n'
                         '  "total_principal": <float>,\n'

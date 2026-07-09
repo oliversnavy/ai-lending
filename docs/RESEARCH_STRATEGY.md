@@ -102,62 +102,72 @@ This yields a proper right-censored survival dataset suitable for Cox PH, discre
 
 ## Customer Sensitivity Model
 
-A synthetic parametric acceptance model made available to the agent as a callable tool. Given an applicant's features and a proposed offer (amount, rate, term), it returns a probability that the customer accepts the offer.
+A synthetic parametric acceptance model made available to the agent as a callable tool. Given an applicant's features and a proposed offer, it returns the probability that the customer accepts.
 
 **Why synthetic, not data-trained:** The public LendingClub dataset contains only funded loans — applications that both LendingClub approved and the borrower accepted. There is no "LendingClub made an offer, borrower declined" signal in the data. Training a sensitivity model on funded loans would conflate LendingClub's underwriting decisions with borrower acceptance behavior. A synthetic model with calibrated parameters avoids this selection bias, provides a known ground truth that can be reasoned about analytically, and is fully reproducible.
 
-**Model formulation:**
+### Two-model adverse selection design
+
+The simulation ships **two** sensitivity models with different rate elasticities. The design reflects a key empirical reality in consumer credit: when a lender charges above-market rates, the borrowers who still accept are disproportionately those who cannot obtain credit elsewhere — i.e., higher actual credit risk within the same grade tier.
+
+**Model formulation (shared structure, different β_spread):**
 ```
-P(accept | applicant, offer) = sigmoid(
+P(accept | applicant, offer, type) = sigmoid(
     α₀
-    - β_rate   * (offered_rate - market_rate_for_grade)
-    - β_amount * (offered_amount / annual_inc)
-    + β_match  * (offered_amount / requested_amount)
+    - β_spread(type) * max(0, offered_rate - market_rate_for_grade)
+    - β_burden       * (loan_amnt / annual_inc)
+    + β_match        * (loan_amnt / funded_amnt)
     + ε
 )
 ```
-β coefficients calibrated to produce plausible acceptance behavior (30–60% average acceptance, meaningfully sensitive to rate). Calibration is informed by Karlan & Zinman (2008), who find consumer loan demand is relatively inelastic at market rates but becomes highly elastic above-market — consistent with our logistic formulation where `BETA_SPREAD` creates a sharp acceptance cliff at above-market pricing.
 
-**Implemented parameters (see `data_pipeline/sensitivity_model.py`):**
+| Model | File | β_spread | Interpretation |
+|---|---|---|---|
+| Non-defaulter | `sensitivity_model_nondefaulter.pkl` | 16.0 | Has outside credit options; walks away from above-market offers |
+| Defaulter | `sensitivity_model_defaulter.pkl` | 8.0 | Credit-constrained; accepts even costly offers |
+
+The effective acceptance probability and expected loss for a borrower, given the agent's risk model estimate `p_default_hat`, are:
+
+```
+p_accept_eff  = p_default_hat × p_accept_bad + (1 − p_default_hat) × p_accept_good
+expected_loss = val['event'] × p_accept_bad × balance_at_t
+```
+
+This creates genuine adverse selection: charging above-market rates selectively attracts the worst borrowers within each grade. **Flat-rate strategies (e.g., 36% to all Grade C–F) are therefore suboptimal** — the effective default rate in the accepted pool rises sharply with rate spread.
+
+**Adverse selection calibration (β_spread_bad=8, β_spread_good=16):**
+| Grade | Base default rate | Eff. default rate at 36% | Delta |
+|---|---|---|---|
+| C | 18.0% | ~40% | +22 pp |
+| D | 23.9% | ~39% | +15 pp |
+| E | 30.6% | ~37% | +6 pp |
+| F | 35.2% | ~37% | +2 pp |
+
+Grade C and D are most penalised because their market rates (19%, 24%) are furthest below the 36% ceiling, maximising adverse selection. Grade F is near-neutral because its market rate (34%) is close to 36%.
+
+**Shared parameters (see `data_pipeline/sensitivity_model.py`):**
 - `COST_OF_CAPITAL = 0.16`, `SERVICING_MARGIN = 0.03`, `EXPECTED_LOSS_BUFFER = 0.02` → `MIN_VIABLE_RATE = 0.21`
-- `ALPHA_0 = 0.20`, `BETA_SPREAD = 12.0`, `BETA_BURDEN = 1.5`, `BETA_MATCH = 0.50`, `NOISE_STD = 0.30`
-- Serialized to `data/processed/sensitivity_model.pkl`
+- `ALPHA_0 = 0.20`, `BETA_BURDEN = 1.5`, `BETA_MATCH = 0.50`, `NOISE_STD = 0.30`
 
-**Calibrated acceptance rates:**
-| Grade | Market Rate | @ Market | @ Min Viable | @ Market+5pp |
-|---|---|---|---|---|
-| A | 9.5% | 0% (below floor) | 27% | 0% (below floor) |
-| B | 14.0% | 0% (below floor) | 38% | 0% (below floor) |
-| C | 19.0% | 0% (below floor) | 52% | 44% |
-| D | 24.0% | 59% | 58% | 44% |
-| E | 29.5% | 59% | 59% | 44% |
-| F/G | 34–37% | 58% | 58% | 44% |
+**Why the within-grade adverse selection signal is absent from the raw LendingClub data:** Analysis of the training set showed defaulters and non-defaulters within the same sub-grade received nearly identical rates (spread < 0.12 pp, vs ~1 pp within-sub-grade std dev). LendingClub's granular 35-sub-grade system pre-absorbed the between-borrower rate variation, leaving no empirical calibration signal for differential acceptance elasticity. The two-model parameters are therefore theoretically grounded (Karlan & Zinman 2008) rather than data-estimated.
 
 **Fairness note:** `zip_code` is retained as a feature. It is predictive (local economic conditions correlate with default risk) but carries disparate impact risk due to historical redlining patterns. If the agent relies heavily on this feature, it warrants discussion in the paper's limitations section.
 
-**Cost of capital / competitive rate floor:** The simulation explicitly models a non-bank fintech lender with a high cost of capital (e.g., 16% blended warehouse + ABS funding). This imposes a minimum viable offer rate:
-
-```
-min_viable_rate = COST_OF_CAPITAL + expected_loss_provision + servicing_margin
-```
-
-For prime borrowers (Grade A/B), `min_viable_rate` substantially exceeds market rates (prime borrowers have access to cheap bank alternatives), so acceptance probability collapses even at optimal pricing. For subprime borrowers (Grade D–F), market rates are high enough that the lender is competitive. This creates a realistic market segmentation the agent must discover through iteration.
+**Cost of capital / competitive rate floor:** The simulation explicitly models a non-bank fintech lender with a high cost of capital (16% blended warehouse + ABS funding), imposing a minimum viable offer rate of 21%. For prime borrowers (Grade A/B), this floor substantially exceeds market rates, so acceptance collapses. For subprime borrowers (Grade D–F), market rates are high enough that the lender is competitive.
 
 | LendingClub Grade | Approx Market Rate | Competitive for This Lender? |
 |---|---|---|
 | A (750+ FICO) | 8–11% | No — deeply uncompetitive |
 | B (700–749) | 12–16% | No — marginally uncompetitive |
-| C (670–699) | 17–21% | Borderline |
+| C (670–699) | 17–21% | Borderline — adverse selection severe at viable rates |
 | D (640–669) | 22–26% | Yes — viable, tight margin |
 | E (600–639) | 27–32% | Yes — sweet spot |
-| F/G (<600) | 33%+ | Yes — high margin, high loss risk |
-
-Cost of capital is given to the agent as an explicit known constraint (not inferred), consistent with how a real credit team would operate.
+| F/G (<600) | 33%+ | Yes — high margin, high loss risk, small adverse selection penalty |
 
 **Design notes:**
 - Moderate stochasticity baked in — enough that the agent must reason in expected value terms, not enough to wash out the learning signal
-- Made available as a tool the agent can call during pricing optimization
-- Held fixed across all experimental variants (not re-trained between episodes)
+- Both models held fixed across all experimental variants (not re-trained between episodes)
+- Both models callable via `sensitivity_model_query` tool or loaded directly as pickles
 
 **Portfolio constraint:** The agent operates under a **capital cap + minimum volume floor**. The cap (maximum total principal deployed) prevents unlimited cherry-picking. The volume floor (minimum number of loans funded) prevents the degenerate strategy of approving only the 5 safest loans at extreme margin, forcing the agent to navigate the full viable credit spectrum.
 
@@ -172,7 +182,7 @@ Cost of capital is given to the agent as an explicit known constraint (not infer
 
 ### Primary
 - **Simulated Portfolio P&L** on validation OOT (within-loop feedback) and final holdout (reported results)
-- Computed as: sum of (interest collected - principal lost) across accepted loans, weighted by acceptance probability from sensitivity model
+- Computed as: sum of (interest income − principal loss) across accepted loans, weighted by effective acceptance probability from the two sensitivity models. Uses proper loan amortisation: loss is the **remaining outstanding balance at default** (not original principal), and interest income reflects **actual amortised payments received** (not simple rate × time). A month-50 default on a 60-month loan loses ~30% of original principal, not 100%.
 
 ### Secondary
 - **Concordance Index (C-statistic)** on survival model

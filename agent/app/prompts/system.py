@@ -111,7 +111,7 @@ p_accept = p_default_hat * p_accept_bad + (1 - p_default_hat) * p_accept_good
 import numpy as np
 
 r            = val['offered_rate'] / 12                              # monthly rate (per-loan vector)
-term_months  = val['term'].str.extract(r'(\d+)')[0].astype(int)     # 36 or 60
+term_months  = val['term'].str.extract(r'(\\d+)')[0].astype(int)    # 36 or 60
 t            = val['observed_time']                                  # months observed
 
 monthly_pmt  = val['loan_amnt'] * r / (1 - (1 + r) ** (-term_months))

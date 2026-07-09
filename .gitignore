@@ -19,6 +19,7 @@ results/episode_indexes/*.jsonl
 
 # Pilot archive is committed for paper reference; exclude large binary outputs only
 results/pilots/**/*.parquet
+results/pilots/**/*.pkl
 
 # vLLM build artifacts
 vllm-install/

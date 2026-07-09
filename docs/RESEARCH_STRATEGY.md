@@ -50,7 +50,8 @@ The agent is tasked with designing a Python-based credit risk assessment and pri
 - Requires multi-turn, multi-step reasoning across data exploration, feature engineering, modeling, and optimization
 - Rich enough that long-term memory about what approaches work has genuine value
 - Directly relevant to real-world fintech applications (revenue-based financing, consumer lending)
-- Assumption explicitly noted: offer pricing/terms are not modeled as causal to default conditions — observed LendingClub outcomes are treated as fixed. This is a portfolio selection simulation, not a causal pricing model.
+- Assumption explicitly noted: offer pricing/terms do **not** causally affect individual borrower default probabilities — each borrower's `event` (default/survive) is fixed from historical LendingClub outcomes and does not change based on the rate we offer them. We do not model payment-stress effects (where high rates cause otherwise-safe borrowers to default).
+- However, offered rate **does** affect portfolio-level default rates through **adverse selection**: the two sensitivity models cause above-market rates to disproportionately attract credit-constrained borrowers (those who would default), causing non-defaulters with outside options to walk away. This is a selection composition effect, not a causal one — the distinction is meaningful and noted in the paper's limitations.
 
 ---
 

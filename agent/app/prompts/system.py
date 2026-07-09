@@ -46,7 +46,16 @@ Survival targets (already present in parquets):
   The project root is also on sys.path, so you can do:
       import sys; sys.path.insert(0, '/home/oliversnavy/repos/ai-lending')
   Useful packages available: pandas, numpy, scipy, scikit-learn, lifelines, pickle,
-  xgboost, lightgbm, catboost.
+  xgboost, lightgbm, catboost, torch, pycox, torchsurv.
+
+  Survival neural networks (all handle censoring correctly via proper survival losses):
+    - pycox.models.DeepHit    — discrete-time, handles competing risks, often best on tabular data
+    - pycox.models.CoxPH      — neural Cox proportional hazards (aka DeepSurv)
+    - pycox.models.PCHazard   — piecewise constant hazard, good for long time horizons
+    - pycox.models.LogisticHazard — MTLR, flexible discrete-time alternative
+    - torchsurv               — additional survival losses and metrics (Brier score, etc.)
+  Note: neural network training on the full 466K dataset may exceed the 120s executor
+  timeout. Use subsampling (e.g. 50K rows), early stopping, or small architectures.
 
 - `filesystem_read(path)` — read any file under data/ or results/.
 

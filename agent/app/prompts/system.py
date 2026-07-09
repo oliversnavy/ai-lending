@@ -45,7 +45,8 @@ Survival targets (already present in parquets):
   Returns stdout, stderr, exit_code. Your working directory is on sys.path.
   The project root is also on sys.path, so you can do:
       import sys; sys.path.insert(0, '/home/oliversnavy/repos/ai-lending')
-  Useful packages available: pandas, numpy, scipy, scikit-learn, lifelines, pickle.
+  Useful packages available: pandas, numpy, scipy, scikit-learn, lifelines, pickle,
+  xgboost, lightgbm, catboost.
 
 - `filesystem_read(path)` — read any file under data/ or results/.
 

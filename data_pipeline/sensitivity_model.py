@@ -117,7 +117,9 @@ class SensitivityModel:
       sensitivity_model_defaulter.pkl     (beta_spread=8.0  — rate-inelastic)
 
     Use both together to model adverse selection; see the P&L formula in the
-    system prompt for how to combine them with your risk model's p_default_hat.
+    system prompt. Which curve applies to a given historical loan is selected
+    by the realized `event` outcome (ground truth), not by the risk model's
+    p_default_hat — this is a backtest, so the borrower's true type is known.
     """
 
     def __init__(

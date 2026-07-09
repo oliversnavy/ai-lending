@@ -127,12 +127,25 @@ P(accept | applicant, offer, type) = sigmoid(
 | Non-defaulter | `sensitivity_model_nondefaulter.pkl` | 16.0 | Has outside credit options; walks away from above-market offers |
 | Defaulter | `sensitivity_model_defaulter.pkl` | 8.0 | Credit-constrained; accepts even costly offers |
 
-The effective acceptance probability and expected loss for a borrower, given the agent's risk model estimate `p_default_hat`, are:
+This is evaluated as a **backtest** on historical loans, so each borrower's realized `event`
+outcome is known ground truth. The acceptance probability and expected loss both key off
+`event` directly — not off the agent's own risk model estimate `p_default_hat`:
 
 ```
-p_accept_eff  = p_default_hat × p_accept_bad + (1 − p_default_hat) × p_accept_good
-expected_loss = val['event'] × p_accept_bad × balance_at_t
+p_accept_eff  = event × p_accept_bad + (1 − event) × p_accept_good
+expected_loss = event × p_accept_bad × balance_at_t
 ```
+
+`p_default_hat` is deliberately excluded from this formula. Early drafts blended acceptance
+by `p_default_hat` instead of `event`; that let a risk model biased toward predicting
+universally high default probability inflate `p_accept_eff` (via `p_accept_bad`, the more
+lenient curve) across the *entire* population without a matching rise in `expected_loss`
+(which only depends on `event`) — reopening the flat-high-rate degenerate strategy the
+two-model design exists to close, this time via a miscalibrated risk model instead of a
+flat rate. `p_default_hat` still does real work: it drives the agent's pricing function
+(`offered_rate` per applicant) and loan ranking/selection under the capital cap. It just
+never gates the realized acceptance/loss mechanics, since those are already determined by
+history.
 
 This creates genuine adverse selection: charging above-market rates selectively attracts the worst borrowers within each grade. **Flat-rate strategies (e.g., 36% to all Grade C–F) are therefore suboptimal** — the effective default rate in the accepted pool rises sharply with rate spread.
 
@@ -154,28 +167,48 @@ Grade C and D are most penalised because their market rates (19%, 24%) are furth
 
 **Fairness note:** `zip_code` is retained as a feature. It is predictive (local economic conditions correlate with default risk) but carries disparate impact risk due to historical redlining patterns. If the agent relies heavily on this feature, it warrants discussion in the paper's limitations section.
 
-**Cost of capital / competitive rate floor:** The simulation explicitly models a non-bank fintech lender with a high cost of capital (16% blended warehouse + ABS funding), imposing a minimum viable offer rate of 21%. For prime borrowers (Grade A/B), this floor substantially exceeds market rates, so acceptance collapses. For subprime borrowers (Grade D–F), market rates are high enough that the lender is competitive.
+**Cost of capital / risk-based required rate:** The simulation explicitly models a non-bank fintech lender with a high cost of capital (16% blended warehouse + ABS funding) plus a 3% servicing margin. Rather than a flat floor, each applicant has a borrower-specific **required rate** — the minimum rate needed to break even given their predicted default risk:
+
+```
+risk_margin    = (p_default_hat × LGD) / ((1 − p_default_hat) × AVG_TERM_YEARS)
+required_rate  = COST_OF_CAPITAL + SERVICING_MARGIN + risk_margin
+```
+
+`AVG_TERM_YEARS = 3.85` (empirical weighted average loan term). `LGD` (loss-given-default — the average fraction of original principal still outstanding when a loan of this grade charges off) is calibrated per grade from `train.parquet`, using the same amortization math as the P&L formula, applied to actual historical defaulters at their real historical rate:
+
+| Grade | LGD | Grade | LGD |
+|---|---|---|---|
+| A | 0.51 | E | 0.70 |
+| B | 0.55 | F | 0.74 |
+| C | 0.60 | G | 0.77 |
+| D | 0.65 | | |
+
+Riskier grades default earlier relative to their term on average, leaving more principal outstanding — hence higher LGD. If `required_rate > 0.36` (the regulatory ceiling), the applicant is **declined** — no rate exists that makes them profitable within the legal maximum. This is the "kicker": for a real chunk of the worst-scored individuals in Grade F/G, the risk math genuinely doesn't work, independent of any pricing cleverness.
+
+At grade-average default rates, required rates come out to: A≈19.8%, B≈20.8%, C≈22.4%, D≈24.3%, E≈27.0%, F≈29.4%, G≈33.4% — all technically viable, but Grade A/B's required rate sits far above their market rate (8–14%), so the sensitivity models' elasticity does the work of excluding them (borrowers walk) rather than the decline logic. Decline logic mainly bites the worst-scored tail of Grade F/G, where individual `p_default_hat` pushes past the grade average enough to cross the 36% ceiling.
 
 | LendingClub Grade | Approx Market Rate | Competitive for This Lender? |
 |---|---|---|
-| A (750+ FICO) | 8–11% | No — deeply uncompetitive |
-| B (700–749) | 12–16% | No — marginally uncompetitive |
-| C (670–699) | 17–21% | Borderline — adverse selection severe at viable rates |
-| D (640–669) | 22–26% | Yes — viable, tight margin |
-| E (600–639) | 27–32% | Yes — sweet spot |
-| F/G (<600) | 33%+ | Yes — high margin, high loss risk, small adverse selection penalty |
+| A (750+ FICO) | 8–11% | No — required rate (~20%) far exceeds market; borrowers walk |
+| B (700–749) | 12–16% | No — required rate (~21%) still well above market |
+| C (670–699) | 17–21% | Marginal — required rate (~22%) close to market, thin margin |
+| D (640–669) | 22–26% | Yes — required rate (~24%) near market, healthy margin available |
+| E (600–639) | 27–32% | Yes — sweet spot, required rate (~27%) comfortably under market |
+| F/G (<600) | 33%+ | Yes for most; worst-scored tail within grade gets declined outright (required rate > 36%) |
 
 **Design notes:**
 - Moderate stochasticity baked in — enough that the agent must reason in expected value terms, not enough to wash out the learning signal
 - Both models held fixed across all experimental variants (not re-trained between episodes)
 - Both models callable via `sensitivity_model_query` tool or loaded directly as pickles
 
-**Portfolio constraint:** The agent operates under a **capital cap + minimum volume floor**. The cap (maximum total principal deployed) prevents unlimited cherry-picking. The volume floor (minimum number of loans funded) prevents the degenerate strategy of approving only the 5 safest loans at extreme margin, forcing the agent to navigate the full viable credit spectrum.
+**Portfolio constraint:** The agent operates under a **capital cap only, no volume floor**. Earlier designs paired a small $15M cap with a 400-loan floor, sized around an "~1,000 applicants per episode" framing that was never actually enforced in code — agents evaluated against the full ~855K-row val set regardless. Against a pool that size, a $15M cap (~750-950 loans) let greedy ratio-based selection cherry-pick an extreme favorable tail (near-zero-acceptance "free options," and true defaulters who happened to default near loan maturity, leaving almost no outstanding balance) regardless of pricing strategy — a mechanism invisible in aggregate P&L until forced into by real volume. A large cap sized to the full pool ($2.5B — see below) removes the ability to dodge the tradeoff via cherry-picking; volume is left uncapped from below because it's a symptom of good risk-based pricing, not a target in itself — a real lender doesn't chase a headcount, it chases return on deployed capital.
 
-**Baseline parameters (tunable via `configs/base.yaml`):**
-- Capital cap: **$15,000,000** per episode
-- Volume floor: **400 loans** minimum per episode
-- Applicant pool: **~1,000 applicants** per episode
+**Decision vs. evaluation phases — avoiding lookahead bias:** Which loans get offered and which get funded under the cap must be decided using only information available ex-ante (applicant features, the agent's own `p_default_hat`) — never the realized `event`/`observed_time` outcome. Ranking loans by their *realized* P&L to decide who to fund lets the selection cherry-pick applicants because their future is already known (e.g., preferentially "funding" borrowers who happen to not default, or who default very late in their term) — information no real underwriter has at decision time. Realized `event`/`observed_time` is only used afterward, to evaluate the P&L of a portfolio already selected — legitimate, since that's what a backtest is for.
+
+**Baseline parameters (documented in `agent/app/prompts/system.py`; `configs/base.yaml`'s `portfolio` section mirrors these but is not read by any code path):**
+- Capital cap: **$2,500,000,000** per episode
+- No volume floor
+- Applicant pool: full `val.parquet` (no subsampling — ~855K rows, ~459K in the viable Grade C–G segment)
 
 ---
 
@@ -366,7 +399,7 @@ A Recursive Language Model subagent with access to the full running context. Pai
 | 35B-A3B as primary for T2–T7 | Preserves the efficiency story: sparse MoE activates ~3B params per token; advisor pattern only makes sense with a fast/cheap primary |
 | Sparse MoE primary + dense advisor | Tests whether architectural diversity (not just scale) improves reasoning; advisor is only invoked selectively, keeping bulk token cost at MoE rates |
 | P&L as primary metric | Grounds results in economic reality rather than model accuracy proxies |
-| Capital cap + volume floor | Cap prevents cherry-picking; floor forces agent into full viable credit spectrum |
+| Capital cap sized to full applicant pool, no volume floor | A cap sized proportionally to the ~855K-row val set (vs. the pool) prevents ratio-based selection from cherry-picking an unrealistic favorable tail; volume is left as an outcome of risk-based pricing rather than a forced target |
 | Single-prior vs. all-prior loop | Tests local optima trapping; sharpens contrast between naive context injection and structured memory |
 | Synthetic sensitivity model | LendingClub contains only funded loans — no borrower reject signal. Synthetic model avoids selection bias and provides known ground truth for analytical verification |
 | Cost of capital floor | Non-bank fintech cannot competitively serve prime borrowers; CoC floor creates realistic market segmentation the agent must discover. Maps to real-world non-bank lending economics |
@@ -377,7 +410,7 @@ A Recursive Language Model subagent with access to the full running context. Pai
 
 ## Open Questions & Future Work
 
-- Capital cap and volume floor set to $15M / 400 loans as baseline — may need tuning after Treatment 1 baseline runs reveal agent behavior
+- Capital cap set to $2.5B (no volume floor) as baseline — this was tuned empirically (T0 v1/v2 runs showed a $15M cap against the full ~855K-row val set allowed degenerate cherry-picking regardless of pricing strategy); may need further tuning after Treatment 1 baseline runs reveal agent behavior
 - Whether GEPA should optimize per-subagent prompts independently or the full compound system
 - Whether the reflection agent should run post-episode (cleaner) or on a timer (more autonomous)
 - Extension to multi-agent competitive setting (multiple pricing agents competing for same borrower pool)

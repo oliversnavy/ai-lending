@@ -67,7 +67,8 @@ def sensitivity_model_query(
             f"income=${annual_inc:,.0f}\n"
             f"  P(accept | defaulter)     = {p_bad:.3f}  [credit-constrained, rate-inelastic]\n"
             f"  P(accept | non-defaulter) = {p_good:.3f}  [has outside options, rate-sensitive]\n"
-            f"  Note: blend with your p_default_hat estimate for effective P(accept)"
+            f"  Note: in your P&L simulation, select the curve using the realized `event`\n"
+            f"  outcome (backtest ground truth), not your own p_default_hat estimate"
         )
     except Exception as e:
         return f"ERROR: {e}"

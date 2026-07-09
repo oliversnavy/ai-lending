@@ -1,15 +1,18 @@
 # Base experiment configuration — shared defaults across all treatments
 # Override per-treatment in configs/treatments/treatment_N.yaml
 
+# NOTE: portfolio and sensitivity_model values below are documentation only — not read by
+# any code path. The authoritative source is agent/app/prompts/system.py (system prompt,
+# read by the agent) and data_pipeline/sensitivity_model.py (hardcoded constants). Keep
+# these in sync by hand if either changes.
 portfolio:
-  capital_cap: 15_000_000       # max total principal per episode ($)
-  volume_floor: 400             # min loans funded per episode
-  episode_applicant_pool: 1000  # applicants presented per episode
+  capital_cap: 2_500_000_000    # max total principal per episode ($)
+  episode_applicant_pool: "full val.parquet, no subsampling"
 
 sensitivity_model:
   cost_of_capital: 0.16         # blended warehouse + ABS funding rate
   servicing_margin: 0.03        # minimum servicing margin
-  acceptance_noise: 0.05        # stochastic noise in acceptance model (ε std)
+  acceptance_noise: 0.30        # stochastic noise in acceptance model (ε std) — see NOISE_STD
 
 loop:
   plateau_window: 3             # consecutive iterations with no improvement to stop

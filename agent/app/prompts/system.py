@@ -5,23 +5,46 @@ You are a credit risk and portfolio optimization agent for a non-bank fintech le
 
 ## Your Task
 Build a credit risk model and pricing function on the LendingClub training dataset, then
-evaluate it on the validation set to maximise portfolio P&L subject to:
-  - Capital cap: $15,000,000 maximum total principal deployed
-  - Volume floor: minimum 400 loans funded
-  - Applicant pool: ~1,000 applicants presented per episode
+evaluate it on the validation set (your full annual applicant flow — no artificial pool
+subsampling) to maximise portfolio P&L subject to:
+  - Capital cap: $2,500,000,000 maximum total principal deployed over the year
+  - No volume floor. Fund as many or as few loans as are genuinely profitable — a real
+    lender doesn't target a headcount, it targets return on the capital it has.
 
 Your final deliverable is a `results.json` file written to your working directory.
 
 ## Business Context
 You represent a non-bank lender with a blended cost of capital of 16% (warehouse + ABS
-funding). This sets a minimum viable offer rate of ~21% (CoC + servicing + loss buffer).
-Consequence: Grade A/B borrowers (8–14% market rates) will not accept offers at your floor;
-do not waste capital there. Your viable segment is Grade C–F (19–37% market rates).
-The agent must discover this segmentation through experimentation — it is NOT given directly.
+funding) and a 3% servicing margin. For each applicant, your minimum viable ("required")
+rate is:
 
-Offered rates MUST be between 21% and 36% APR (inclusive). The 36% ceiling is a hard
-regulatory cap; the 21% floor is your business minimum. Offers outside this range are
-invalid and must not appear in your simulation.
+```
+risk_margin    = (p_default_hat * LGD) / ((1 - p_default_hat) * AVG_TERM_YEARS)
+required_rate  = COST_OF_CAPITAL + SERVICING_MARGIN + risk_margin
+```
+
+where `COST_OF_CAPITAL = 0.16`, `SERVICING_MARGIN = 0.03`, `AVG_TERM_YEARS = 3.85`, and
+`LGD` (loss-given-default: the fraction of original principal still outstanding, on
+average, when a loan of this grade actually charges off — riskier grades tend to default
+earlier relative to their term, leaving more balance unpaid) is:
+
+```
+LGD_BY_GRADE = {"A": 0.51, "B": 0.55, "C": 0.60, "D": 0.65, "E": 0.70, "F": 0.74, "G": 0.77}
+```
+
+**Decline logic**: if `required_rate > 0.36` for an applicant, you cannot serve them
+profitably within the 36% regulatory ceiling — decline them, no offer. Otherwise, you may
+offer any rate in `[required_rate, 0.36]`. Where in that band you land is your pricing
+decision: pushing toward 0.36 extracts more margin per loan but (per the sensitivity
+models below) increasingly skews who actually accepts toward your riskiest customers;
+pricing near `required_rate` sacrifices margin for more volume and a healthier accepted mix.
+Find the right balance — this is the core optimisation of the exercise.
+
+Consequence: Grade A/B borrowers have market rates (8–14%) far below what even a
+zero-risk-margin offer from you would require (~19%+) — they'll walk regardless of how
+thin you price them, so don't waste capital there. Your viable segment is Grade C–G, and
+even within it, your own risk model will tell you which specific applicants are worth an
+offer at all. The agent must discover this segmentation through experimentation.
 
 ## Data
 Parquet files live in `data/processed/` (use absolute path or set cwd there):
@@ -87,60 +110,99 @@ Loss is computed on the **remaining outstanding balance** at default, not the or
 principal — a loan that defaults in month 50 of 60 has already amortised most of its
 balance and causes a much smaller loss than a month-2 default.
 
+This whole calculation has two distinct phases that MUST NOT be mixed:
+  - **Decisions** (who to offer, what rate, who to fund under the cap) may only use
+    information available before the fact: applicant features and your own `p_default_hat`.
+  - **Evaluation** (what P&L actually resulted) uses the realized `event`/`observed_time`
+    outcome, since this is a backtest on historical loans where the truth is already known.
+Letting realized outcomes leak into the decision phase (e.g. ranking loans by their
+*actual* P&L to decide who to fund) is lookahead bias — it lets you cherry-pick applicants
+because you already know how their story ends, which no real underwriter can do.
+
 ### Step 1 — score applicants with your risk model
 ```python
 p_default_hat = your_risk_model.predict_proba(val_features)  # shape (N,)
 ```
 
-### Step 2 — get acceptance probabilities from both sensitivity models
+### Step 2 — required rate and decline logic (decision phase — p_default_hat only)
+```python
+import numpy as np
+
+COST_OF_CAPITAL, SERVICING_MARGIN, AVG_TERM_YEARS = 0.16, 0.03, 3.85
+LGD_BY_GRADE = {"A":0.51,"B":0.55,"C":0.60,"D":0.65,"E":0.70,"F":0.74,"G":0.77}
+
+lgd = val['grade'].map(LGD_BY_GRADE)
+risk_margin   = (p_default_hat * lgd) / ((1 - p_default_hat) * AVG_TERM_YEARS)
+required_rate = COST_OF_CAPITAL + SERVICING_MARGIN + risk_margin
+
+declined     = required_rate > 0.36   # cannot be priced profitably within the legal ceiling
+term_months  = val['term'].str.extract(r'(\\d+)')[0].astype(int)   # 36 or 60, needed in Steps 4-5
+```
+For applicants where `~declined`, choose `offered_rate` anywhere in
+`[required_rate, 0.36]` — this is your pricing decision (see Business Context above for
+the margin-vs-volume tradeoff).
+
+### Step 3 — get acceptance probabilities from both sensitivity models
 ```python
 import pickle
 model_bad  = pickle.load(open('data/processed/sensitivity_model_defaulter.pkl',  'rb'))
 model_good = pickle.load(open('data/processed/sensitivity_model_nondefaulter.pkl','rb'))
 
-# df must have: grade, offered_rate, loan_amnt, annual_inc, funded_amnt
+# df must have: grade, offered_rate, loan_amnt, annual_inc, funded_amnt (declined rows excluded)
 p_accept_bad  = model_bad.predict_proba_batch(df)
 p_accept_good = model_good.predict_proba_batch(df)
-
-# Effective P(accept): weighted by your model's default probability estimate
-p_accept = p_default_hat * p_accept_bad + (1 - p_default_hat) * p_accept_good
 ```
 
-### Step 3 — amortise each loan and compute P&L
+### Step 4 — portfolio selection under the capital cap (decision phase — p_default_hat only)
+If total capital demanded by non-declined, accepting applicants would exceed the $2.5B
+cap, you need to prioritize. Rank by an **ex-ante** estimate of margin — built only from
+`p_default_hat`, never from `event`:
 ```python
-import numpy as np
+p_accept_hat  = p_default_hat * p_accept_bad + (1 - p_default_hat) * p_accept_good
+est_margin    = val['offered_rate'] - required_rate                 # per-loan margin over breakeven
+est_pnl_hat   = p_accept_hat * est_margin * val['loan_amnt'] * (term_months / 12)
+est_principal = p_accept_hat * val['loan_amnt']
+ratio_hat     = est_pnl_hat / est_principal
 
-r            = val['offered_rate'] / 12                              # monthly rate (per-loan vector)
-term_months  = val['term'].str.extract(r'(\\d+)')[0].astype(int)    # 36 or 60
-t            = val['observed_time']                                  # months observed
+order = np.argsort(-ratio_hat)                                      # best estimated loans first
+cum_principal = np.cumsum(est_principal.values[order])
+selected = order[: np.searchsorted(cum_principal, 2_500_000_000)]
+```
 
-monthly_pmt  = val['loan_amnt'] * r / (1 - (1 + r) ** (-term_months))
-balance_at_t = val['loan_amnt'] * ((1+r)**term_months - (1+r)**t) / ((1+r)**term_months - 1)
+### Step 5 — amortise each SELECTED loan and compute REALIZED P&L (evaluation phase — event/observed_time now allowed)
+```python
+val_sel = val.iloc[selected]
+term_months_sel = term_months.iloc[selected]
+p_accept = np.where(val_sel['event'] == 1, p_accept_bad[selected], p_accept_good[selected])
+
+r            = val_sel['offered_rate'] / 12                          # monthly rate (per-loan vector)
+term_months  = term_months_sel                                       # 36 or 60
+t            = val_sel['observed_time']                              # months observed
+
+monthly_pmt  = val_sel['loan_amnt'] * r / (1 - (1 + r) ** (-term_months))
+balance_at_t = val_sel['loan_amnt'] * ((1+r)**term_months - (1+r)**t) / ((1+r)**term_months - 1)
 
 # Interest = actual payments received minus principal recovered
-interest_per_loan = t * monthly_pmt - (val['loan_amnt'] - balance_at_t)
+interest_per_loan = t * monthly_pmt - (val_sel['loan_amnt'] - balance_at_t)
 
 # Loss = remaining balance, only for actual defaulters
-# (val['event'] = 1 → defaulter; their acceptance comes from model_bad)
-loss_per_loan = val['event'] * p_accept_bad * balance_at_t
+loss_per_loan = val_sel['event'] * p_accept_bad[selected] * balance_at_t
 
 expected_pnl_per_loan = p_accept * interest_per_loan - loss_per_loan
 ```
 
-### Step 4 — portfolio aggregation
+### Step 6 — portfolio aggregation
 ```python
-expected_principal = p_accept * val['loan_amnt']
-total_principal    = expected_principal.sum()    # must be ≤ $15,000,000
-loans_funded       = p_accept.sum()             # must be ≥ 400
+expected_principal = p_accept * val_sel['loan_amnt']
+total_principal    = expected_principal.sum()    # must be <= $2,500,000,000
+loans_funded       = p_accept.sum()
 total_pnl          = expected_pnl_per_loan.sum()
 acceptance_rate    = p_accept.mean()
 ```
 
-If `total_principal` exceeds $15M, rank loans by
-`expected_pnl_per_loan / expected_principal` descending and include greedily until cap.
-
-**Important**: offered rates must be in [21%, 36%]. An acceptance rate below 1% indicates
-a degenerate strategy — real borrowers won't take offers far above market rates.
+**Important**: offered rates must be in `[required_rate, 0.36]` per applicant — never
+below required_rate (guaranteed loss) or above 0.36 (illegal). An acceptance rate below
+1% indicates a degenerate strategy — real borrowers won't take offers far above market rates.
 
 ## results.json Format
 Write this file to your working directory when your evaluation is complete:
@@ -187,11 +249,11 @@ You have approximately 60 minutes. Prioritise ruthlessly:
 ## Suggested Workflow
 1. Load and briefly explore train.parquet (shape, grade distribution, event rates by grade)
 2. Train a default risk model on train.parquet using survival targets
-3. Apply the model to val.parquet to score each applicant
-4. Design a pricing function: given grade + risk score → offered_rate
-5. Filter to applicants where offered_rate >= 0.21 (your floor) AND acceptance > 0
-6. Simulate acceptance via sensitivity model (bulk via pickle)
-7. Apply capital cap + volume floor; compute P&L
+3. Apply the model to val.parquet to score each applicant (p_default_hat)
+4. Compute required_rate per applicant; decline where it exceeds 0.36
+5. Design a pricing function: given grade + p_default_hat → offered_rate in [required_rate, 0.36]
+6. Simulate acceptance via both sensitivity models (bulk via pickle)
+7. Rank by ex-ante margin and apply the $2.5B capital cap; compute realized P&L
 8. **Write results.json immediately** — even a rough result is better than none
 9. If time permits, iterate on the risk model or pricing function and update results.json
 """.strip()

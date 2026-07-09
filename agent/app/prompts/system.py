@@ -66,36 +66,81 @@ Survival targets (already present in parquets):
   Do NOT pass `code=` or `filename=` to this tool — only `command` is accepted.
 
 - `sensitivity_model_query(grade, offered_rate, loan_amnt, annual_inc, funded_amnt)`
-  — spot-check acceptance probability for a single applicant + offer.
-  For bulk evaluation, load the pickle directly in code_executor:
+  — spot-check acceptance probabilities for a single applicant + offer.
+  Returns P(accept) from BOTH the defaulter and non-defaulter sensitivity models.
+  For bulk evaluation, load the pickles directly in code_executor:
       import pickle
-      model = pickle.load(open('data/processed/sensitivity_model.pkl', 'rb'))
-      probs = model.predict_proba_batch(df_with_offer_cols)
+      model_bad  = pickle.load(open('data/processed/sensitivity_model_defaulter.pkl',  'rb'))
+      model_good = pickle.load(open('data/processed/sensitivity_model_nondefaulter.pkl','rb'))
+      p_accept_bad  = model_bad.predict_proba_batch(df)   # defaulters  (rate-inelastic)
+      p_accept_good = model_good.predict_proba_batch(df)  # non-defaulters (rate-sensitive)
   df must have columns: grade, offered_rate, loan_amnt, annual_inc, funded_amnt.
 
 ## P&L Calculation
-Use an **expected-value simulation**: treat p_accept from the sensitivity model as the
-probability each borrower accepts, and compute expected portfolio metrics as follows.
 
-For each loan you make an offer to:
-  expected_principal   = p_accept × loan_amnt
-  expected_interest    = p_accept × loan_amnt × offered_rate × (observed_time / 12)
-  expected_loss        = p_accept × loan_amnt × event   (event=1 if Charged Off)
-  expected_pnl         = expected_interest - expected_loss
+Two sensitivity models capture **adverse selection**: borrowers who default are more
+credit-constrained and accept even above-market offers (`model_bad`, rate-inelastic).
+Non-defaulters have outside options and walk away from above-market rates (`model_good`,
+rate-sensitive). Charging flat high rates therefore fills your portfolio with risky borrowers.
 
-Portfolio aggregation:
-  total_principal  = sum(expected_principal)      — must be ≤ $15,000,000
-  loans_funded     = sum(p_accept)                — expected number of acceptances
-                     (report as a rounded integer; must be ≥ 400)
-  total_pnl        = sum(expected_pnl)
-  acceptance_rate  = mean(p_accept) across all loans you offered
+Loss is computed on the **remaining outstanding balance** at default, not the original
+principal — a loan that defaults in month 50 of 60 has already amortised most of its
+balance and causes a much smaller loss than a month-2 default.
 
-If total_principal exceeds $15M, rank offered loans by (expected_pnl / expected_principal)
-descending and include loans greedily until the cap is hit.
+### Step 1 — score applicants with your risk model
+```python
+p_default_hat = your_risk_model.predict_proba(val_features)  # shape (N,)
+```
 
-**Important**: a strategy that achieves high P&L by offering rates outside 21–36% or by
-generating an acceptance rate below 1% is invalid. Real borrowers won't take predatory
-offers; the sensitivity model's probabilities are only reliable in the 21–36% band.
+### Step 2 — get acceptance probabilities from both sensitivity models
+```python
+import pickle
+model_bad  = pickle.load(open('data/processed/sensitivity_model_defaulter.pkl',  'rb'))
+model_good = pickle.load(open('data/processed/sensitivity_model_nondefaulter.pkl','rb'))
+
+# df must have: grade, offered_rate, loan_amnt, annual_inc, funded_amnt
+p_accept_bad  = model_bad.predict_proba_batch(df)
+p_accept_good = model_good.predict_proba_batch(df)
+
+# Effective P(accept): weighted by your model's default probability estimate
+p_accept = p_default_hat * p_accept_bad + (1 - p_default_hat) * p_accept_good
+```
+
+### Step 3 — amortise each loan and compute P&L
+```python
+import numpy as np
+
+r            = val['offered_rate'] / 12                              # monthly rate (per-loan vector)
+term_months  = val['term'].str.extract(r'(\d+)')[0].astype(int)     # 36 or 60
+t            = val['observed_time']                                  # months observed
+
+monthly_pmt  = val['loan_amnt'] * r / (1 - (1 + r) ** (-term_months))
+balance_at_t = val['loan_amnt'] * ((1+r)**term_months - (1+r)**t) / ((1+r)**term_months - 1)
+
+# Interest = actual payments received minus principal recovered
+interest_per_loan = t * monthly_pmt - (val['loan_amnt'] - balance_at_t)
+
+# Loss = remaining balance, only for actual defaulters
+# (val['event'] = 1 → defaulter; their acceptance comes from model_bad)
+loss_per_loan = val['event'] * p_accept_bad * balance_at_t
+
+expected_pnl_per_loan = p_accept * interest_per_loan - loss_per_loan
+```
+
+### Step 4 — portfolio aggregation
+```python
+expected_principal = p_accept * val['loan_amnt']
+total_principal    = expected_principal.sum()    # must be ≤ $15,000,000
+loans_funded       = p_accept.sum()             # must be ≥ 400
+total_pnl          = expected_pnl_per_loan.sum()
+acceptance_rate    = p_accept.mean()
+```
+
+If `total_principal` exceeds $15M, rank loans by
+`expected_pnl_per_loan / expected_principal` descending and include greedily until cap.
+
+**Important**: offered rates must be in [21%, 36%]. An acceptance rate below 1% indicates
+a degenerate strategy — real borrowers won't take offers far above market rates.
 
 ## results.json Format
 Write this file to your working directory when your evaluation is complete:

@@ -15,9 +15,27 @@ For prime borrowers (Grade A/B), the minimum viable rate exceeds market
 rates, so acceptance probability collapses regardless of pricing.
 The viable zone is approximately Grade C–F.
 
+Two-model adverse selection design
+-----------------------------------
+The simulation ships two sensitivity models with different rate elasticities:
+
+  sensitivity_model_nondefaulter.pkl  beta_spread=16.0
+    Non-defaulters have outside credit options. When offered above-market
+    rates they walk away — high rate sensitivity.
+
+  sensitivity_model_defaulter.pkl     beta_spread=8.0
+    Defaulters are credit-constrained. They accept even at above-market
+    rates — low rate sensitivity.
+
+Together these create realistic adverse selection: charging above-market
+rates increasingly fills the accepted pool with higher-risk borrowers,
+raising expected loss faster than interest income. Flat 36% to Grade C/D
+is therefore suboptimal — the effective default rate in the accepted pool
+rises by ~15-23 pp, swamping the rate premium.
+
 Usage:
-    uv run python data_pipeline/sensitivity_model.py  # calibrate and save
-    from data_pipeline.sensitivity_model import SensitivityModel  # load and use
+    uv run python data_pipeline/sensitivity_model.py  # calibrate and save both models
+    from data_pipeline.sensitivity_model import SensitivityModel, load  # load and use
 """
 
 import pathlib
@@ -26,7 +44,9 @@ import numpy as np
 import pandas as pd
 
 
-OUT_PATH = pathlib.Path("data/processed/sensitivity_model.pkl")
+OUT_PATH            = pathlib.Path("data/processed/sensitivity_model.pkl")
+OUT_PATH_DEFAULTER  = pathlib.Path("data/processed/sensitivity_model_defaulter.pkl")
+OUT_PATH_NONDEFAULTER = pathlib.Path("data/processed/sensitivity_model_nondefaulter.pkl")
 
 # ---------------------------------------------------------------------------
 # Cost of capital / minimum viable rate
@@ -74,7 +94,9 @@ MARKET_RATE_BY_GRADE = {
 # ---------------------------------------------------------------------------
 
 ALPHA_0 = 0.20      # base log-odds (~55% at market rate, neutral burden)
-BETA_SPREAD = 12.0  # sensitivity to rate above market (strong penalty)
+BETA_SPREAD = 12.0  # legacy single-model value (kept for reference)
+BETA_SPREAD_NONDEFAULTER = 16.0  # non-defaulters: high rate sensitivity (have outside options)
+BETA_SPREAD_DEFAULTER    =  8.0  # defaulters: low rate sensitivity (credit-constrained)
 BETA_BURDEN = 1.5  # sensitivity to loan amount / income ratio
 BETA_MATCH = 0.50  # reward for funding close to what borrower requested
 NOISE_STD = 0.30   # stochastic noise (ε ~ N(0, NOISE_STD))
@@ -85,9 +107,17 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
 
 
 class SensitivityModel:
+    __module__ = "data_pipeline.sensitivity_model"  # ensures correct pickle path when run as __main__
     """
     Callable acceptance model. Given applicant features and offer terms,
     returns P(accept). Held fixed across all 7 experimental treatments.
+
+    Two pre-built variants are saved to data/processed/:
+      sensitivity_model_nondefaulter.pkl  (beta_spread=16.0 — rate-sensitive)
+      sensitivity_model_defaulter.pkl     (beta_spread=8.0  — rate-inelastic)
+
+    Use both together to model adverse selection; see the P&L formula in the
+    system prompt for how to combine them with your risk model's p_default_hat.
     """
 
     def __init__(
@@ -177,48 +207,60 @@ class SensitivityModel:
         return probs
 
 
-def calibrate_and_show() -> SensitivityModel:
-    """Run a quick calibration check across grades and rate scenarios."""
-    model = SensitivityModel()
+def calibrate_and_show() -> tuple["SensitivityModel", "SensitivityModel"]:
+    """Build both sensitivity models and print a calibration comparison."""
+    model_good = SensitivityModel(beta_spread=BETA_SPREAD_NONDEFAULTER)
+    model_bad  = SensitivityModel(beta_spread=BETA_SPREAD_DEFAULTER)
 
-    print("Acceptance probability by grade at key rate scenarios")
-    print(f"Min viable rate: {MIN_VIABLE_RATE:.0%}\n")
+    DEFAULT_RATES = {"C": 0.180, "D": 0.239, "E": 0.306, "F": 0.352}
 
-    header = f"{'Grade':<6} {'Market':>8} {'@Market':>10} {'@MinViable':>12} {'@+5pp':>8} {'@+10pp':>8}"
-    print(header)
-    print("-" * len(header))
+    def _mean_p(model, grade, rate, n=500):
+        return np.mean([model.predict_proba(grade, rate, 15000, 65000, 15000) for _ in range(n)])
 
-    for grade in ["A", "B", "C", "D", "E", "F", "G"]:
-        market = MARKET_RATE_BY_GRADE[grade]
-        results = []
-        for rate in [market, MIN_VIABLE_RATE, market + 0.05, market + 0.10]:
-            # Average over many samples to get stable expected value
-            samples = [
-                model.predict_proba(grade, rate, 15000, 65000, 15000)
-                for _ in range(500)
-            ]
-            results.append(np.mean(samples))
+    print("Adverse selection check — effective default rate in accepted pool")
+    print(f"{'Grade':6s} {'Rate':>6s}  {'p_acc(good)':>11s}  {'p_acc(bad)':>10s}  {'p_acc_eff':>10s}  {'eff_def_rate':>13s}  {'vs_base':>8s}")
+    print("-" * 75)
+    for grade in ["C", "D", "E", "F"]:
+        pd_ = DEFAULT_RATES[grade]
+        mkt = MARKET_RATE_BY_GRADE[grade]
+        for rate in [mkt, 0.28, 0.36]:
+            pg = _mean_p(model_good, grade, rate)
+            pb = _mean_p(model_bad,  grade, rate)
+            pe = pd_ * pb + (1 - pd_) * pg
+            eff_def = (pd_ * pb / pe) if pe > 0 else 0
+            print(f"{grade:6s} {rate:>6.1%}  {pg:>11.1%}  {pb:>10.1%}  {pe:>10.1%}  {eff_def:>13.1%}  {eff_def-pd_:>+8.1%}")
+        print()
 
-        print(
-            f"{grade:<6} {market:>8.1%} {results[0]:>10.1%} {results[1]:>12.1%} "
-            f"{results[2]:>8.1%} {results[3]:>8.1%}"
-        )
-
-    return model
+    return model_good, model_bad
 
 
-def save(model: SensitivityModel, path: pathlib.Path = OUT_PATH) -> None:
+def save(model: "SensitivityModel", path: pathlib.Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         pickle.dump(model, f)
-    print(f"\nModel saved → {path}")
+    print(f"Saved → {path}")
 
 
-def load(path: pathlib.Path = OUT_PATH) -> SensitivityModel:
+def load(path: pathlib.Path) -> "SensitivityModel":
     with open(path, "rb") as f:
         return pickle.load(f)
 
 
+def load_nondefaulter(path: pathlib.Path = OUT_PATH_NONDEFAULTER) -> "SensitivityModel":
+    return load(path)
+
+
+def load_defaulter(path: pathlib.Path = OUT_PATH_DEFAULTER) -> "SensitivityModel":
+    return load(path)
+
+
 if __name__ == "__main__":
-    model = calibrate_and_show()
-    save(model)
+    # Import via importlib so SensitivityModel is pickled as data_pipeline.sensitivity_model.SensitivityModel
+    # (not __main__.SensitivityModel), which allows loading from any other module.
+    import importlib
+    _mod = importlib.import_module("data_pipeline.sensitivity_model")
+    _good = _mod.SensitivityModel(beta_spread=_mod.BETA_SPREAD_NONDEFAULTER)
+    _bad  = _mod.SensitivityModel(beta_spread=_mod.BETA_SPREAD_DEFAULTER)
+    calibrate_and_show()
+    _mod.save(_good, _mod.OUT_PATH_NONDEFAULTER)
+    _mod.save(_bad,  _mod.OUT_PATH_DEFAULTER)

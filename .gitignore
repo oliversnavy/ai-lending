@@ -21,6 +21,10 @@ results/episode_indexes/*.jsonl
 results/pilots/**/*.parquet
 results/pilots/**/*.pkl
 
+# T0 v1 archive — local reference only, includes multi-hundred-MB traces (some >100MB,
+# over GitHub's push limit); not committed
+results/archive/
+
 # vLLM build artifacts
 vllm-install/
 

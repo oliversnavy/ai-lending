@@ -185,7 +185,7 @@ def _read_results(
     else:
         narrative = {}
 
-    if metrics["eval_status"] != "ok":
+    if metrics["eval_status"] == "failed":
         approach = narrative.get(
             "approach", "Agent did not produce a valid risk_model.pkl / pricing_policy.py pair."
         )
@@ -202,6 +202,12 @@ def _read_results(
         acceptance_rate=float(metrics["acceptance_rate"]),
         loans_funded=int(metrics["loans_funded"]),
         total_principal=float(metrics["total_principal"]),
+        pnl_val=float(metrics["pnl_val"]),
+        c_stat_val=float(metrics["c_stat_val"]),
+        acceptance_rate_val=float(metrics["acceptance_rate_val"]),
+        loans_funded_val=int(metrics["loans_funded_val"]),
+        total_principal_val=float(metrics["total_principal_val"]),
+        eval_status=metrics["eval_status"],
         approach=approach,
         hypothesis=hypothesis,
         skill_path=str(skill_dir.relative_to(PROJECT_ROOT)),

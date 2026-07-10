@@ -45,11 +45,22 @@ TREATMENT_CONFIGS: dict[str, TreatmentConfig] = {
 class EpisodeRecord(BaseModel):
     episode_id: int
     treatment: str
+    # Primary, reported metrics — scored against holdout.parquet, which the agent never
+    # touches during the episode. This is what RESEARCH_STRATEGY.md commits to reporting.
     pnl: float
     c_stat: float
     acceptance_rate: float
     loans_funded: int
     total_principal: float
+    # Diagnostic-only metrics — scored against val.parquet, the same sample the agent's
+    # own local grid search was tuned against during the episode. Expected to run a bit
+    # optimistic relative to holdout; useful for within-loop analysis, not primary results.
+    pnl_val: float = 0.0
+    c_stat_val: float = 0.0
+    acceptance_rate_val: float = 0.0
+    loans_funded_val: int = 0
+    total_principal_val: float = 0.0
+    eval_status: str = "unknown"  # "ok" | "partial" | "failed"
     approach: str
     hypothesis: str
     skill_path: str
@@ -59,7 +70,8 @@ class EpisodeRecord(BaseModel):
     def to_index_line(self) -> str:
         return (
             f"Episode {self.episode_id:03d} | "
-            f"P&L: ${self.pnl / 1000:.1f}k | "
+            f"P&L (holdout): ${self.pnl / 1000:.1f}k | "
+            f"P&L (val): ${self.pnl_val / 1000:.1f}k | "
             f"C-stat: {self.c_stat:.3f} | "
             f"Acceptance: {self.acceptance_rate:.1%} | "
             f"Loans: {self.loans_funded} | "

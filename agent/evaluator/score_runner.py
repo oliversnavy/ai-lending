@@ -1,14 +1,17 @@
 """
 Runs INSIDE a subprocess, isolated from the harness's main process. This is the only
 place agent-authored code (risk_model.pkl's unpickled class, pricing_policy.py) ever
-executes. It is only ever given val_features_only.parquet — event/observed_time are
-physically absent from that file, so there is nothing to accidentally leak. (A pricing
-function that deliberately hardcodes the real val.parquet's absolute path and reads it
+executes. It is only ever given a features-only file — event/observed_time are
+physically absent, so there is nothing to accidentally leak. (A pricing function that
+deliberately hardcodes the real val.parquet/holdout.parquet's absolute path and reads it
 directly is a known, unclosed residual risk — see known_limitations.md; closing that
 needs real OS-level sandboxing this environment doesn't have yet.)
 
+Called once per dataset (val, then holdout) against the SAME saved artifacts — no
+retraining, just two forward passes, so the extra holdout pass is cheap.
+
 Usage (invoked by evaluate_episode.py, not run directly):
-    python score_runner.py <skill_dir> <output_path>
+    python score_runner.py <skill_dir> <features_path> <output_path>
 
 Writes a parquet with columns: p_default_hat, offered_rate_raw, required_rate
 """
@@ -20,8 +23,6 @@ import sys
 
 import numpy as np
 import pandas as pd
-
-FEATURES_ONLY_PATH = pathlib.Path("/home/oliversnavy/repos/ai-lending/data/processed/val_features_only.parquet")
 
 
 def compute_required_rate(p_default_hat: np.ndarray, grade: pd.Series) -> np.ndarray:
@@ -47,7 +48,8 @@ def load_pricing_policy(skill_dir: pathlib.Path):
 
 def main() -> None:
     skill_dir = pathlib.Path(sys.argv[1])
-    output_path = pathlib.Path(sys.argv[2])
+    features_path = pathlib.Path(sys.argv[2])
+    output_path = pathlib.Path(sys.argv[3])
 
     model_path = skill_dir / "risk_model.pkl"
     if not model_path.exists():
@@ -60,7 +62,7 @@ def main() -> None:
         print("ERROR: risk_model.pkl must expose a predict_default_proba(X) method", file=sys.stderr)
         sys.exit(1)
 
-    X = pd.read_parquet(FEATURES_ONLY_PATH)  # features only — no event/observed_time present in this file
+    X = pd.read_parquet(features_path)  # features only — no event/observed_time present in this file
 
     p_default_hat = np.asarray(model.predict_default_proba(X), dtype=float)
     if p_default_hat.shape[0] != len(X):

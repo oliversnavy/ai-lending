@@ -165,31 +165,45 @@ def _read_results(
     tokens_used: int,
     duration_s: float,
 ) -> EpisodeRecord:
-    results_path = skill_dir / "results.json"
+    """
+    pnl/c_stat/acceptance_rate/loans_funded/total_principal are computed independently
+    by the harness (agent/evaluator/evaluate_episode.py) from the agent's submitted
+    risk_model.pkl + pricing_policy.py — never self-reported. Only approach/hypothesis
+    are taken from the agent's own results.json, since those are free text with no
+    metric to fabricate.
+    """
+    from ..evaluator.evaluate_episode import evaluate_episode
 
+    metrics = evaluate_episode(skill_dir)
+
+    results_path = skill_dir / "results.json"
     if results_path.exists():
-        data = json.loads(results_path.read_text())
+        try:
+            narrative = json.loads(results_path.read_text())
+        except json.JSONDecodeError:
+            narrative = {}
     else:
-        data = {
-            "pnl": 0.0,
-            "c_stat": 0.0,
-            "acceptance_rate": 0.0,
-            "loans_funded": 0,
-            "total_principal": 0.0,
-            "approach": "Agent did not complete (no results.json produced).",
-            "hypothesis": "N/A",
-        }
+        narrative = {}
+
+    if metrics["eval_status"] != "ok":
+        approach = narrative.get(
+            "approach", "Agent did not produce a valid risk_model.pkl / pricing_policy.py pair."
+        )
+        hypothesis = narrative.get("hypothesis", "N/A")
+    else:
+        approach = str(narrative.get("approach", ""))
+        hypothesis = str(narrative.get("hypothesis", ""))
 
     return EpisodeRecord(
         episode_id=episode_id,
         treatment=treatment,
-        pnl=float(data.get("pnl", 0)),
-        c_stat=float(data.get("c_stat", 0)),
-        acceptance_rate=float(data.get("acceptance_rate", 0)),
-        loans_funded=int(data.get("loans_funded", 0)),
-        total_principal=float(data.get("total_principal", 0)),
-        approach=str(data.get("approach", "")),
-        hypothesis=str(data.get("hypothesis", "")),
+        pnl=float(metrics["pnl"]),
+        c_stat=float(metrics["c_stat"]),
+        acceptance_rate=float(metrics["acceptance_rate"]),
+        loans_funded=int(metrics["loans_funded"]),
+        total_principal=float(metrics["total_principal"]),
+        approach=approach,
+        hypothesis=hypothesis,
         skill_path=str(skill_dir.relative_to(PROJECT_ROOT)),
         tokens_used=tokens_used,
         duration_s=round(duration_s, 1),

@@ -2,12 +2,18 @@
 TimeAwarenessMiddleware — injects wall-clock budget messages before model calls.
 
 The agent has no intrinsic sense of elapsed time. Without reminders, it
-over-invests in model iteration and runs out of context before writing
-results.json. This middleware injects a brief HumanMessage at 50%, 75%,
-and 90% of the episode budget so the agent can prioritise accordingly.
+over-invests in model iteration and runs out of context before saving its
+deliverable (risk_model.pkl + pricing_policy.py). This middleware injects a
+brief HumanMessage at 50%, 75%, and 90% of the episode budget so the agent
+can prioritise accordingly.
 
 At 90%+ with can_jump_to=["end"], it can also hard-terminate if needed
 (currently just warns — flip exit_on_expiry=True to enable hard stop).
+
+Deliberately does not ask the agent to compute/report final metrics under time
+pressure — that combination (time pressure + "just write a number") is what
+produced episode_0005's fabricated result. pnl/c_stat/etc. are computed
+independently from the saved artifacts by agent/evaluator/evaluate_episode.py.
 """
 from __future__ import annotations
 
@@ -85,8 +91,8 @@ class TimeAwarenessMiddleware(AgentMiddleware):
             log.warning("[TimeAwareness] Episode budget exhausted (%.0fs elapsed)", elapsed)
             msg = (
                 "EPISODE TIME EXPIRED: Your 60-minute budget is used up. "
-                "Write results.json IMMEDIATELY using whatever results you have. "
-                "Do not run any more scripts — just write the file."
+                "Save risk_model.pkl and pricing_policy.py IMMEDIATELY using whatever you have. "
+                "Do not run any more experiments — just save the two files."
             )
             if self.exit_on_expiry:
                 return {"messages": [HumanMessage(content=msg)], "jump_to": "end"}
@@ -99,21 +105,22 @@ class TimeAwarenessMiddleware(AgentMiddleware):
         if threshold_hit >= 0.90:
             msg = (
                 f"TIME WARNING (90%): Only {remaining_min:.0f} minutes remaining in this episode. "
-                "Stop optimising. Write results.json NOW with your current best result. "
-                "A submitted result beats no result."
+                "Stop optimising. Save risk_model.pkl and pricing_policy.py NOW with your "
+                "current best model/pricing logic. Saved artifacts beat no artifacts."
             )
         elif threshold_hit >= 0.75:
             msg = (
                 f"TIME WARNING (75%): {remaining_min:.0f} minutes remaining. "
                 "You should have a working pipeline by now. "
-                "Write results.json with your current best result, "
+                "Save risk_model.pkl and pricing_policy.py with your current best approach, "
                 "then iterate only if time clearly permits."
             )
         else:  # 50%
             msg = (
                 f"TIME CHECK (50%): {remaining_min:.0f} minutes remaining in this episode. "
                 "If you don't yet have a working end-to-end pipeline, simplify now. "
-                "Logistic regression beats no model; a rough P&L beats no P&L."
+                "Logistic regression beats no model; a simple saved pricing_policy.py "
+                "beats a sophisticated one that never gets saved."
             )
 
         return {"messages": [HumanMessage(content=msg)]}

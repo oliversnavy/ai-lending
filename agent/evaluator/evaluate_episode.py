@@ -61,11 +61,16 @@ def _run_score_subprocess(skill_dir: pathlib.Path, features_path: pathlib.Path) 
             # skill_dir on PYTHONPATH so custom classes the agent's model.pkl depends on
             # (defined in the agent's own scripts) can be found again for unpickling —
             # same issue we hit with SensitivityModel's __main__ pickling earlier today.
-            # Deliberately NOT including PROJECT_ROOT / LENDING_DATA_DIR here — raises the
-            # bar against accidental leakage. Does not stop a pricing function that
-            # hardcodes the real val.parquet/holdout.parquet's absolute path (known
-            # residual risk — see known_limitations.md).
-            "PYTHONPATH": str(skill_dir),
+            # PROJECT_ROOT is also included so `data_pipeline.sensitivity_model` is
+            # importable -- pricing_policy.py legitimately loading the sensitivity model
+            # pickles directly (exactly as the system prompt documents) needs this, since
+            # those pickles are saved with __module__="data_pipeline.sensitivity_model".
+            # This doesn't newly enable ground-truth leakage: the real val.parquet/
+            # holdout.parquet absolute paths are already documented in the agent-facing
+            # system prompt, so a hardcoded-path read was always possible regardless of
+            # PYTHONPATH (known residual risk — see known_limitations.md). This only fixes
+            # importing a specific harness-provided module, not general filesystem access.
+            "PYTHONPATH": f"{skill_dir}:{PROJECT_ROOT}",
         }
         try:
             result = subprocess.run(

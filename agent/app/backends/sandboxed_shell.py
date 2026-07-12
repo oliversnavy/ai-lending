@@ -45,6 +45,19 @@ AppArmor profile installed); enabling it needs a system-wide sudo policy
 change. Docker requires no privilege change (the harness user is already in
 the `docker` group) at the cost of a per-command container-startup latency
 (~1-2s), which is negligible against the existing 180s execute() timeout.
+
+max_output_bytes default is lowered from LocalShellBackend's 100_000 to
+20_000 (2026-07-12): a single execute() call returning a ~100KB traceback
+(e.g. a pandas KeyError dumping its entire missing-keys array, as seen
+repeatedly across T1a episodes) can push a conversation from comfortably
+under budget to over the model's 65,536-token hard limit in one step.
+ContextEditingMiddleware (see graph.py) reacts to *accumulated* conversation
+size using an approximate token counter that undercounts dense/repetitive
+text worse than the ~2x factor it's tuned for, so it isn't reliable against
+a single oversized spike -- it can only clean up growth it already knows
+about, not a message that's already too large to safely add. Capping single
+tool outputs well below the trigger threshold prevents any one call from
+single-handedly causing the overflow, independent of counter accuracy.
 """
 from __future__ import annotations
 
@@ -69,8 +82,14 @@ class SandboxedLocalShellBackend(LocalShellBackend):
     write outside of root_dir (skill_dir).
     """
 
-    def __init__(self, *args, project_root: pathlib.Path, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        *args,
+        project_root: pathlib.Path,
+        max_output_bytes: int = 20_000,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, max_output_bytes=max_output_bytes, **kwargs)
         self._project_root = pathlib.Path(project_root).resolve()
         self._venv_bin = self._project_root / ".venv" / "bin"
 

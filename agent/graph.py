@@ -7,8 +7,8 @@ from langchain.agents.middleware.context_editing import ClearToolUsesEdit, Conte
 from langchain_core.messages import AIMessage
 from deepagents.graph import create_deep_agent
 from deepagents.middleware.subagents import SubAgent
-from deepagents.backends.local_shell import LocalShellBackend
 
+from agent.app.backends.sandboxed_shell import SandboxedLocalShellBackend
 from agent.app.clients.langfuse import get_langfuse_callback
 from agent.app.clients.vllm import get_primary_client
 from agent.app.models.episode import TreatmentConfig
@@ -118,15 +118,26 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
                 f"Never pass code= or filename= to execute — only command= is accepted."
             ),
         }
-        # LocalShellBackend gives the agent real filesystem access and a
-        # working execute() tool. The default SandboxBackendProtocol silently
-        # returns [] for all ls() calls and blocks execute() entirely.
-        # FilesystemPermission is incompatible with LocalShellBackend (deepagents
-        # limitation), so we rely on system-prompt guidance instead of tool-level
-        # path restrictions — acceptable for a single-user research environment.
+        # SandboxedLocalShellBackend gives the agent real filesystem access and a
+        # working execute() tool, but execute() runs inside an ephemeral Docker
+        # container: PROJECT_ROOT is bind-mounted read-only, skill_dir read-write
+        # on top, --network none. This replaced plain LocalShellBackend after a
+        # real incident (2026-07-11, T1a episode_0002): with an unsandboxed
+        # LocalShellBackend, shell commands run directly on the host with no path
+        # restriction at all (execute() bypasses HarnessGuardrailsMiddleware's
+        # write-path check, which only applies to the write_file/edit_file native
+        # tools), and the episode used `cat > .../data_pipeline/sensitivity_model.py
+        # << EOF` to overwrite a shared project file. See sandboxed_shell.py for
+        # the full incident writeup and design rationale.
         # 180s execute timeout: forces agent toward faster approaches (LR, sampling)
         # rather than burning 600s on full-dataset GBM/grid-search that repeatedly times out.
-        backend = LocalShellBackend(root_dir=str(skill_dir), virtual_mode=False, inherit_env=True, timeout=180)
+        backend = SandboxedLocalShellBackend(
+            root_dir=str(skill_dir),
+            virtual_mode=False,
+            inherit_env=True,
+            timeout=180,
+            project_root=PROJECT_ROOT,
+        )
         guardrails = HarnessGuardrailsMiddleware(
             skill_dir=skill_dir,
             data_dir=PROJECT_ROOT / "data" / "processed",

@@ -48,6 +48,7 @@ the `docker` group) at the cost of a per-command container-startup latency
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
 import uuid
@@ -92,6 +93,12 @@ class SandboxedLocalShellBackend(LocalShellBackend):
             "--name", container_name,
             "--network", "none",
             "--memory", "16g",
+            # Without --user, containers run as root by default, so anything the
+            # agent writes under skill_dir (a host bind mount, not a virtualized
+            # fs) comes back root-owned. Running as the host uid:gid keeps
+            # episode artifacts owned by the harness user, matching every other
+            # write path (write_file/edit_file) and every pre-sandbox episode.
+            "--user", f"{os.getuid()}:{os.getgid()}",
             "-v", f"{self._project_root}:{self._project_root}:ro",
             "-v", "/usr:/usr:ro",
             "-v", "/etc:/etc:ro",

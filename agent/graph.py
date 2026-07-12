@@ -144,13 +144,35 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
         )
         results_guard = ResultsGuardMiddleware(skill_dir=skill_dir, max_retries=1)
         time_aware = TimeAwarenessMiddleware(max_seconds=treatment_config.max_episode_seconds)
+        # create_deep_agent() unconditionally injects its own SummarizationMiddleware
+        # via deepagents.middleware.summarization.compute_summarization_defaults().
+        # That function only picks a sane fraction-based trigger when the model has
+        # LangChain profile metadata exposing max_input_tokens -- our locally-hosted
+        # vLLM model has none, so it falls back to a fixed trigger=("tokens", 170_000).
+        # Our real hard limit is 65,536 tokens, so that fallback trigger can never
+        # fire before the model API itself 400s. Root cause of repeated "maximum
+        # context length is 65536 tokens" crashes across T1a episodes (2026-07-12) --
+        # confirmed T0 never hits this because it uses the hand-tuned constants below,
+        # while T1a/T1b silently inherited the miscalibrated library default.
+        # There's no public create_deep_agent() hook to exclude that default
+        # middleware, so this adds the SAME stateless, request-only backstop T0 uses
+        # (ContextEditingMiddleware operates on the outgoing request only, not
+        # LangGraph state, so it can't conflict with the auto-injected summarizer --
+        # it just clears old tool results well before either one would ever need to).
+        # Positioned last so it's innermost, closest to the actual API call.
+        context_editor = ContextEditingMiddleware(
+            edits=[ClearToolUsesEdit(
+                trigger=_T0_CONTEXT_EDIT_TRIGGER,
+                keep=_T0_CONTEXT_EDIT_KEEP,
+            )],
+        )
         graph = create_deep_agent(
             model=llm,
             tools=tools,
             system_prompt=system_prompt,
             subagents=[subagent],
             backend=backend,
-            middleware=[guardrails, results_guard, time_aware],
+            middleware=[guardrails, results_guard, time_aware, context_editor],
         )
 
     return graph, callbacks

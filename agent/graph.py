@@ -33,10 +33,37 @@ from agent.app.tools import get_t0_tools, get_supplementary_tools
 #   before the hard 57K limit. Replaces old tool results with "[cleared]" in
 #   the request only — LangGraph state is untouched, so Summarization still
 #   compresses properly on the next turn. Keeps the 5 most recent tool results.
+#
+# These stay tuned to the *old* 65,536 vllm-primary max-model-len even though
+# the server itself now runs at 131,072 (see _DEEP_AGENT_CONTEXT_EDIT_TRIGGER
+# below) -- T0 already completed its target 20-valid-episode run under this
+# budget, so there's no reason to touch it; a smaller-than-necessary trigger
+# just means it compacts a bit earlier than it strictly needs to, not a bug.
 _T0_SUMMARIZE_TRIGGER   = ("tokens", 30_000)
 _T0_SUMMARIZE_KEEP      = ("tokens", 10_000)
 _T0_CONTEXT_EDIT_TRIGGER = 25_000
 _T0_CONTEXT_EDIT_KEEP    = 5
+
+# Context management constants for T1+ (deep agent).
+# 2026-07-12: vllm-primary's --max-model-len raised from 65,536 to 131,072
+# (vllm-advisor stopped to free the memory; see docs/infra_notes.md and the
+# 2026-07-12 project memory entry for the full incident/decision writeup).
+# This was the actual fix for a night of repeated "maximum context length is
+# 65536 tokens" crashes in T1a: ContextEditingMiddleware's approximate token
+# counter was confirmed (via live instrumentation) to undercount T1a's dense
+# numeric tool output by ~2.5x -- worse than the ~2x factor T0's own trigger
+# assumes -- so no amount of threshold-tuning against the old 65,536 ceiling
+# was reliable. Doubling the real ceiling makes that undercount tolerable
+# instead of trying to out-guess it.
+# Trigger derivation: effective input budget is now 131,072 - 8,192 (primary
+# output reserve) = 122,880 real tokens. At a conservative worst-case 2.5x
+# undercount, an approximate-count trigger needs to stay under roughly
+# 122,880 / 2.5 ≈ 49,152 to guarantee firing before the real hard limit;
+# 40,000 leaves comfortable margin below that without giving up most of the
+# new headroom (a smaller intermediate step vs. reusing T0's 25,000 trigger,
+# which would barely use any of the doubled context at all).
+_DEEP_AGENT_CONTEXT_EDIT_TRIGGER = 40_000
+_DEEP_AGENT_CONTEXT_EDIT_KEEP    = 5
 
 PROJECT_ROOT = pathlib.Path("/home/oliversnavy/repos/ai-lending")
 
@@ -149,21 +176,19 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
         # That function only picks a sane fraction-based trigger when the model has
         # LangChain profile metadata exposing max_input_tokens -- our locally-hosted
         # vLLM model has none, so it falls back to a fixed trigger=("tokens", 170_000).
-        # Our real hard limit is 65,536 tokens, so that fallback trigger can never
-        # fire before the model API itself 400s. Root cause of repeated "maximum
-        # context length is 65536 tokens" crashes across T1a episodes (2026-07-12) --
-        # confirmed T0 never hits this because it uses the hand-tuned constants below,
-        # while T1a/T1b silently inherited the miscalibrated library default.
-        # There's no public create_deep_agent() hook to exclude that default
-        # middleware, so this adds the SAME stateless, request-only backstop T0 uses
+        # That's still above the real hard limit even after the 2026-07-12 context
+        # expansion (131,072), so this fallback default remains permanently inert --
+        # ContextEditingMiddleware below is the only thing actually protecting T1a/T1b.
+        # There's no public create_deep_agent() hook to exclude the auto-injected
+        # default, so this adds the same stateless, request-only backstop T0 uses
         # (ContextEditingMiddleware operates on the outgoing request only, not
         # LangGraph state, so it can't conflict with the auto-injected summarizer --
         # it just clears old tool results well before either one would ever need to).
         # Positioned last so it's innermost, closest to the actual API call.
         context_editor = ContextEditingMiddleware(
             edits=[ClearToolUsesEdit(
-                trigger=_T0_CONTEXT_EDIT_TRIGGER,
-                keep=_T0_CONTEXT_EDIT_KEEP,
+                trigger=_DEEP_AGENT_CONTEXT_EDIT_TRIGGER,
+                keep=_DEEP_AGENT_CONTEXT_EDIT_KEEP,
             )],
         )
         graph = create_deep_agent(

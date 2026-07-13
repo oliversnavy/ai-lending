@@ -345,7 +345,40 @@ guidance that you must implement. Aim for 2–4 consultations per episode.
 """.strip()
 
 
-def get_system_prompt(use_advisor: bool = False) -> str:
+SUBAGENT_GUIDANCE = """
+
+## Subagent Delegation
+You have a `task` tool that spawns a "general-purpose" subagent with its own independent
+context window (it shares your working directory, so it can read your files and write
+directly into it). Use it deliberately to keep your own context free for the decisions
+that matter most — final model choice, pricing strategy, and what you ultimately save.
+
+Good candidates for delegation:
+  - Initial data exploration (shape, distributions, event rates by grade/segment) —
+    delegate it, then work from the subagent's summary instead of re-running it yourself
+  - A full "train and validate a candidate model" loop, including any trial-and-error
+    debugging (feature engineering bugs, dtype errors, retries) — delegate the whole
+    loop as one task and bring back only the final trained artifact plus a short
+    performance summary, not the blow-by-blow debugging transcript
+  - Exploratory grid search or strategy comparison (e.g. sweeping markup fractions
+    against the sensitivity models) — delegate the sweep, bring back only the winning
+    parameters and the resulting P&L table
+
+Keep for yourself: choosing between candidate approaches and the final decision to save
+risk_model.pkl / pricing_policy.py — you're responsible for what actually ends up in your
+working directory at the end, even if a subagent wrote it there for you.
+
+Delegate at least one substantial subtask this episode — not a one-line check. A subtask
+is a good delegation candidate if it would take many tool calls and produce a lot of
+intermediate output (training logs, debugging output, grid search results) directly in
+your own context; when in doubt, delegate it rather than doing it inline.
+""".strip()
+
+
+def get_system_prompt(use_advisor: bool = False, use_deep_agent: bool = False) -> str:
+    prompt = BASE_SYSTEM_PROMPT
     if use_advisor:
-        return BASE_SYSTEM_PROMPT + "\n\n" + ADVISOR_GUIDANCE
-    return BASE_SYSTEM_PROMPT
+        prompt += "\n\n" + ADVISOR_GUIDANCE
+    if use_deep_agent:
+        prompt += "\n\n" + SUBAGENT_GUIDANCE
+    return prompt

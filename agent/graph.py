@@ -70,8 +70,8 @@ PROJECT_ROOT = pathlib.Path("/home/oliversnavy/repos/ai-lending")
 
 def _resolve_system_prompt(tc: TreatmentConfig) -> str:
     if tc.use_gepa_prompts:
-        return get_optimised_prompt() or get_system_prompt(tc.use_advisor)
-    return get_system_prompt(tc.use_advisor)
+        return get_optimised_prompt() or get_system_prompt(tc.use_advisor, tc.use_deep_agent)
+    return get_system_prompt(tc.use_advisor, tc.use_deep_agent)
 
 
 def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
@@ -112,6 +112,33 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
     else:
         # T1+: create_deep_agent with batteries on + our supplementary tools
         tools = get_supplementary_tools(treatment_config)
+        # create_deep_agent() unconditionally injects its own SummarizationMiddleware
+        # via deepagents.middleware.summarization.compute_summarization_defaults().
+        # That function only picks a sane fraction-based trigger when the model has
+        # LangChain profile metadata exposing max_input_tokens -- our locally-hosted
+        # vLLM model has none, so it falls back to a fixed trigger=("tokens", 170_000).
+        # That's still above the real hard limit even after the 2026-07-12 context
+        # expansion (131,072), so this fallback default remains permanently inert --
+        # ContextEditingMiddleware is the only thing actually protecting T1a/T1b.
+        # There's no public create_deep_agent() hook to exclude the auto-injected
+        # default, so this adds the same stateless, request-only backstop T0 uses
+        # (ContextEditingMiddleware operates on the outgoing request only, not
+        # LangGraph state, so it can't conflict with the auto-injected summarizer --
+        # it just clears old tool results well before either one would ever need to).
+        # Built once here and reused for BOTH the main agent (below) and the
+        # general-purpose subagent (via its own "middleware" spec key) -- the
+        # auto-generated default subagent gets the SAME useless 170K-trigger
+        # summarizer and nothing else, so a delegated subagent would otherwise
+        # have zero effective context protection despite sharing the same model
+        # and the same real 131,072 ceiling. This only became a live concern once
+        # SUBAGENT_GUIDANCE (system.py) started actively encouraging delegation --
+        # previously the agent never once used the task tool, so the gap was inert.
+        context_editor = ContextEditingMiddleware(
+            edits=[ClearToolUsesEdit(
+                trigger=_DEEP_AGENT_CONTEXT_EDIT_TRIGGER,
+                keep=_DEEP_AGENT_CONTEXT_EDIT_KEEP,
+            )],
+        )
         # Override the default general-purpose subagent with explicit paths
         # so spawned subagents know where to find data without searching.
         subagent: SubAgent = {
@@ -121,6 +148,7 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
                 "Use for data exploration, model training, evaluation, or any "
                 "task that benefits from running code in a subprocess."
             ),
+            "middleware": [context_editor],
             "system_prompt": (
                 f"You are a Python/data-science assistant helping with a credit risk task.\n\n"
                 f"Key paths (always use absolute paths in code):\n"
@@ -171,26 +199,8 @@ def build_graph(treatment_config: TreatmentConfig, skill_dir: pathlib.Path):
         )
         results_guard = ResultsGuardMiddleware(skill_dir=skill_dir, max_retries=1)
         time_aware = TimeAwarenessMiddleware(max_seconds=treatment_config.max_episode_seconds)
-        # create_deep_agent() unconditionally injects its own SummarizationMiddleware
-        # via deepagents.middleware.summarization.compute_summarization_defaults().
-        # That function only picks a sane fraction-based trigger when the model has
-        # LangChain profile metadata exposing max_input_tokens -- our locally-hosted
-        # vLLM model has none, so it falls back to a fixed trigger=("tokens", 170_000).
-        # That's still above the real hard limit even after the 2026-07-12 context
-        # expansion (131,072), so this fallback default remains permanently inert --
-        # ContextEditingMiddleware below is the only thing actually protecting T1a/T1b.
-        # There's no public create_deep_agent() hook to exclude the auto-injected
-        # default, so this adds the same stateless, request-only backstop T0 uses
-        # (ContextEditingMiddleware operates on the outgoing request only, not
-        # LangGraph state, so it can't conflict with the auto-injected summarizer --
-        # it just clears old tool results well before either one would ever need to).
-        # Positioned last so it's innermost, closest to the actual API call.
-        context_editor = ContextEditingMiddleware(
-            edits=[ClearToolUsesEdit(
-                trigger=_DEEP_AGENT_CONTEXT_EDIT_TRIGGER,
-                keep=_DEEP_AGENT_CONTEXT_EDIT_KEEP,
-            )],
-        )
+        # context_editor (built above, before the subagent spec) is positioned last
+        # here so it's innermost, closest to the actual API call.
         graph = create_deep_agent(
             model=llm,
             tools=tools,
